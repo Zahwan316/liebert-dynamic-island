@@ -51,11 +51,12 @@ pub fn decode_album_art(bytes: &[u8]) -> Option<Arc<AlbumArt>> {
         .with_guessed_format()
         .ok()?;
     let mut limits = image::Limits::default();
-    // The largest consumer is a 118 px pill thumbnail; decoding beyond 1024 px / 8 MiB only
-    // creates a transient memory spike without improving the rendered result.
-    limits.max_image_width = Some(1024);
-    limits.max_image_height = Some(1024);
-    limits.max_alloc = Some(8 * 1024 * 1024);
+    // Cover URLs are commonly 1280–1500 px (YouTube Music maxres, Apple Music, Tidal), so
+    // rejecting them here made Linux covers disappear. Keep the old decode ceiling; the RAM
+    // saving comes from the 128×128 output, not from refusing valid sources.
+    limits.max_image_width = Some(2048);
+    limits.max_image_height = Some(2048);
+    limits.max_alloc = Some(16 * 1024 * 1024);
     reader.limits(limits);
     let img = reader.decode().ok()?;
     let resized = img.resize(128, 128, image::imageops::FilterType::Triangle);
@@ -595,5 +596,21 @@ mod tests {
 
         let gray = [180, 180, 180, 255].repeat(32);
         assert_eq!(extract_dominant_accent(&gray), None);
+    }
+
+    #[test]
+    fn decode_album_art_accepts_common_large_cover_resolutions() {
+        // YouTube Music `maxresdefault.jpg` is 1280x720; a 1024 px decode cap made
+        // Linux album covers disappear entirely.
+        let rgb = image::RgbImage::from_fn(1280, 720, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])
+        });
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut bytes)
+            .encode(rgb.as_raw(), 1280, 720, image::ColorType::Rgb8.into())
+            .expect("encode jpeg");
+        let art = decode_album_art(&bytes).expect("decode 1280x720 cover");
+        assert_eq!((art.width, art.height), (128, 72));
+        assert_eq!(art.rgba.len(), 128 * 72 * 4);
     }
 }

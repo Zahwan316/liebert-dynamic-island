@@ -10,6 +10,27 @@ tags:
 
 ## 2026-11-27
 
+### Added (v0.1.6)
+
+- `src/ui/icons.rs`, `src/ui/mod.rs`: Ikon panah kiri/kanan digambar sebagai **vektor** (`ChevronLeft`/`ChevronRight`) dan keduanya menjadi tombol klik yang benar-benar mengganti tab. Sebelumnya teks Unicode `◀ ▶` sering hilang pada instalasi Linux tanpa font yang mencakup U+25C0/U+25B6, sehingga indikator arrow tidak terlihat; tombol vektor juga memberi fallback bagi overlay click-through yang tidak bisa menerima fokus keyboard. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-024).
+- `src/platform/mod.rs`: Unit test `decode_album_art_accepts_common_large_cover_resolutions` mendekode cover JPEG `1280×720` (resolusi `maxresdefault` YouTube Music) dan memastikan hasil resize `128×72`, mencegah regresi batas decode.
+
+### Changed (v0.1.6)
+
+- `src/ui/mod.rs`: Layout tab **Music** expanded dikembalikan ke versi sebelum v0.1.5 (kolom cover/now-playing + lirik seperti semula, termasuk thumbnail `≈118 px`) pada Linux **dan** Windows; perubahan lyrics-full-width v0.1.5 dibatalkan.
+- `src/ui/mod.rs`: Cache tekstur album art tidak lagi memakai `Arc::as_ptr` sebagai kunci. Kini memakai hash konten (`width`, `height`, `rgba`, `dominant_rgb`) sehingga `Arc` baru dari IPC tidak memicu `tex.set()` berlebih, sekaligus mencegah alamat allocator yang dipakai ulang menyisakan cover lama saat piksel berubah.
+- `src/ui/settings.rs`, `Cargo.toml`, `Cargo.lock`: Jendela Settings tetap memakai `eframe` + `Renderer::Glow` (grup kiri/konten kanan dipertahankan), tetapi kini **mencoba software GL lebih dulu** (`egui_glow::HardwareAcceleration::Off`) sebelum jatuh ke `Preferred`. Upaya ini dapat menghindari pemuatan tumpakan driver GPU/LLVM ratusan MB bila konfigurasi EGL software tersedia; bila tidak, launcher secara otomatis memulai ulang dengan GL normal agar UI tetap berfungsi.
+
+### Fixed (v0.1.6)
+
+- `src/platform/mod.rs`: Batas decode album art dikembalikan ke `2048 px` / `16 MiB` (dari `1024 px` / `8 MiB` di v0.1.5). Batas v0.1.5 menolak cover populer `1280×720`/`1400×1400`, dan kegagalan decode tersebut dikunci oleh `ArtCacheState` sehingga cover tidak pernah muncul. Penghematan RAM tetap dipertahankan lewat output `128×128`, bukan dengan menolak sumber gambar yang valid.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi dinaikkan ke **`0.1.6`**; AppImage + tar.gz Linux dibangun ulang. `cargo test` **66 passed**, clippy Linux + Windows-target bersih. Installer NSIS final tetap diproduksi CI Windows (`makensis` tidak tersedia di host Linux).
+
+### Measured (v0.1.6)
+
+- Jendela Settings (host Linux dengan driver NVIDIA): `VmRSS 102,8 MB`, `Pss 69,0 MB`; `RssFile ≈80 MB` didominasi `libnvidia-gpucomp`, `libnvidia-eglcore`, dan `libLLVM`. Launcher sendiri hanya `VmRSS 7,3 MB`. Percobaan software GL ditolak glutin pada host ini (`failed to find a matching configuration`, juga dengan `LIBGL_ALWAYS_SOFTWARE=1`/`EGL_PLATFORM=x11|wayland|surfaceless`), sehingga fallback hardware dipakai. **Target `< 10 MB` belum tercapai** untuk jendela Settings; lihat ADR-024.
+- Overlay Wayland/Windows tidak berubah dari pengukuran v0.1.5 (`VmRSS ≈23,2 MB`); RSS Windows tidak dapat diukur dari host Linux.
+
 ### Added
 
 - `src/sysmon.rs`, `src/battery.rs`, `src/main.rs`, `src/platform/wayland_layer.rs`, `src/platform/windows_overlay.rs`: Mengaktifkan tab **System** di Linux dengan sampler asli tanpa crate baru — CPU dari `/proc/stat`, RAM dari `/proc/meminfo`, disk dari `/proc/diskstats` + `df -P -k /`, jaringan dari `/proc/net/dev`, dan baterai dari `/sys/class/power_supply`. Worker sysmon kini di-spawn pada jalur Wayland layer-shell, klien `--ui` X11/eframe, dan klien overlay Windows; perubahan config diteruskan lewat `SysmonCommand::SetConfig`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-023).

@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "liebert-dynamic-island"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "any_ascii",
  "calloop 0.13.0",
@@ -1571,6 +1571,7 @@ dependencies = [
  "chrono-tz",
  "directories",
  "eframe",
+ "egui_glow",
  "image",
  "kakasi",
  "serde",

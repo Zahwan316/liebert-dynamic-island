@@ -597,7 +597,7 @@ impl NotificationServer {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("liebert-dynamic-island", "Liebert", "0.1.5", "1.2")
+        ("liebert-dynamic-island", "Liebert", "0.1.6", "1.2")
     }
 }
 
@@ -1454,7 +1454,7 @@ fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
                 .get(&candidate)
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.5",
+                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.6",
                 )
                 .header("Accept", "image/webp,image/png,image/jpeg,image/*,*/*;q=0.8")
                 .call()

@@ -110,11 +110,11 @@ Every `v*` GitHub Release contains:
 
 | Asset | Install |
 | :--- | :--- |
-| `Liebert_Dynamic_Island-0.1.5-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
+| `Liebert_Dynamic_Island-0.1.6-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
 | `liebert-dynamic-island-linux-x86_64.tar.gz` | `tar -xzf`, then run `./liebert-dynamic-island-linux-x86_64/liebert-dynamic-island`. Includes `LICENSE.md`, `README.md`, `.desktop` and icon. |
 | `liebert-dynamic-island-windows-x86_64-setup.exe` | NSIS installer (per-user install, Start Menu shortcuts + uninstaller). |
 | `liebert-dynamic-island-windows-x86_64.zip` | Portable `.exe` + license + README. |
-| `liebert-dynamic-island-aur-0.1.5.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
+| `liebert-dynamic-island-aur-0.1.6.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
 
 Arch Linux users can build from `packaging/aur/` with `makepkg -si` once the package is submitted to the AUR (`yay -S liebert-dynamic-island`). AUR submission itself needs a maintainer account and is **not** automated by CI.
 
@@ -303,7 +303,7 @@ cargo clippy --all-targets -- -D warnings  # Run Clippy with warnings treated as
 cargo build --release                      # Build stripped LTO release binary
 ./scripts/build-linux-release.sh           # Linux tar.gz + AppImage in dist/
 # Windows (with NSIS installed, from repo root):
-#   makensis /DAPP_VERSION=0.1.5 installer\windows\installer.nsi
+#   makensis /DAPP_VERSION=0.1.6 installer\windows\installer.nsi
 ```
 
 ---

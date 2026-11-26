@@ -354,7 +354,38 @@ pub enum SettingsIpcTarget {
 pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<(), String> {
     use std::io::Write;
     use std::net::TcpStream;
+    use std::process::Command;
     use std::time::Duration;
+
+    // Try the software GL path first: on hosts with a software EGL config it avoids loading
+    // the multi-hundred-MB vendor GL/LLVM driver stack. If that config is unavailable eframe
+    // aborts before showing a window, so retry once with hardware acceleration preferred.
+    const GL_ATTEMPT_ENV: &str = "LIEBERT_SETTINGS_GL_ATTEMPT";
+    if std::env::var_os(GL_ATTEMPT_ENV).is_none() {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let args: Vec<_> = std::env::args_os().skip(1).collect();
+        let software_ok = Command::new(&exe)
+            .args(&args)
+            .env(GL_ATTEMPT_ENV, "software")
+            .env("LIEBERT_SETTINGS_SOFTWARE_GL", "1")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if software_ok {
+            return Ok(());
+        }
+        let status = Command::new(&exe)
+            .args(&args)
+            .env(GL_ATTEMPT_ENV, "hardware")
+            .env_remove("LIEBERT_SETTINGS_SOFTWARE_GL")
+            .status()
+            .map_err(|e| e.to_string())?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(format!("settings window exited with {status}"))
+        };
+    }
 
     let config = Config::load();
     let calendar_url_input = config.google_calendar_ics_url.clone();
@@ -466,8 +497,18 @@ pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<
         }
     }
 
+    let software_gl = std::env::var_os("LIEBERT_SETTINGS_SOFTWARE_GL").is_some();
+    let glow_options = egui_glow::GlowConfiguration {
+        hardware_acceleration: if software_gl {
+            egui_glow::HardwareAcceleration::Off
+        } else {
+            egui_glow::HardwareAcceleration::Preferred
+        },
+        ..Default::default()
+    };
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
+        glow_options,
         viewport: ViewportBuilder::default()
             .with_title(SETTINGS_WINDOW_TITLE)
             .with_app_id("liebert-dynamic-island-settings")
