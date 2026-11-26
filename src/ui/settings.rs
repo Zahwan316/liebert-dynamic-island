@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2, ViewportBuilder, ViewportId};
 
+use crate::battery::{format_remaining, read_battery};
 use crate::calendar::{CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events};
 use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
-use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode, TextAlign};
+use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode, TaskbarFormat, TaskbarPosition, TextAlign};
 use crate::lyrics::TRANSLATE_LANGUAGES;
 use crate::platform::InstalledFont;
 use crate::todo::TodoStore;
@@ -17,6 +18,7 @@ pub const SETTINGS_WINDOW_TITLE: &str = "Liebert Dynamic Island — Settings";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     Appearance,
+    System,
     Todo,
     Calendar,
 }
@@ -247,6 +249,7 @@ struct SettingsBodyState<'a> {
 fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
     ui.horizontal(|ui| {
         ui.selectable_value(st.tab, SettingsTab::Appearance, "Appearance");
+        ui.selectable_value(st.tab, SettingsTab::System, "System");
         ui.selectable_value(st.tab, SettingsTab::Todo, "Todo List");
         ui.selectable_value(st.tab, SettingsTab::Calendar, "Google Calendar");
     });
@@ -263,6 +266,7 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
             st.installed_fonts,
             st.font_search,
         ),
+        SettingsTab::System => render_system_tab(ui, st.config, st.config_dirty),
         SettingsTab::Todo => {
             *st.todos_dirty |= render_todo_tab(ui, st.todos, st.new_todo_input);
         }
@@ -1047,5 +1051,140 @@ fn render_calendar_tab(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
                 });
             });
         }
+    }
+}
+
+fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut bool) {
+    let battery = read_battery();
+
+    ui.heading("Taskbar System Monitor");
+    ui.add_space(4.0);
+    if ui
+        .checkbox(&mut config.taskbar_monitor_enabled, "Enable taskbar system monitor")
+        .changed()
+    {
+        *config_dirty = true;
+    }
+
+    ui.add_enabled_ui(config.taskbar_monitor_enabled, |ui| {
+        ui.add_space(6.0);
+        ui.label(RichText::new("Metrics").strong());
+        ui.horizontal_wrapped(|ui| {
+            if ui.checkbox(&mut config.taskbar_show_cpu, "CPU (%)").changed() {
+                *config_dirty = true;
+            }
+            if ui.checkbox(&mut config.taskbar_show_ram, "RAM").changed() {
+                *config_dirty = true;
+            }
+            if ui.checkbox(&mut config.taskbar_show_disk, "Disk (C:)").changed() {
+                *config_dirty = true;
+            }
+            if ui.checkbox(&mut config.taskbar_show_network, "Network (Up/Down)").changed() {
+                *config_dirty = true;
+            }
+            if battery.is_some()
+                && ui.checkbox(&mut config.taskbar_show_battery, "Battery").changed()
+            {
+                *config_dirty = true;
+            }
+        });
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Format:");
+            for fmt in [
+                TaskbarFormat::CompactText,
+                TaskbarFormat::IconValue,
+                TaskbarFormat::MiniBar,
+            ] {
+                if ui
+                    .selectable_value(&mut config.taskbar_format, fmt, fmt.label())
+                    .changed()
+                {
+                    *config_dirty = true;
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Position:");
+            for pos in [
+                TaskbarPosition::LeftOfTray,
+                TaskbarPosition::RightOfTray,
+                TaskbarPosition::TopOfTaskbar,
+            ] {
+                if ui
+                    .selectable_value(&mut config.taskbar_position, pos, pos.label())
+                    .changed()
+                {
+                    *config_dirty = true;
+                }
+            }
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Update Interval:");
+            for (ms, label) in [(500_u64, "500 ms"), (1000, "1 s"), (2000, "2 s")] {
+                if ui
+                    .selectable_value(&mut config.taskbar_interval_ms, ms, label)
+                    .changed()
+                {
+                    *config_dirty = true;
+                }
+            }
+        });
+    });
+
+    if let Some(bat) = battery {
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.heading("Laptop Battery");
+        let rem_str = bat
+            .remaining_secs
+            .map(|s| format!(" — {} remaining", format_remaining(s)))
+            .unwrap_or_default();
+        ui.label(format!(
+            "Status: {} {}% ({}){}",
+            bat.status.short_symbol(),
+            bat.percent,
+            bat.status.label(),
+            rem_str
+        ));
+        ui.add_space(4.0);
+        if ui
+            .checkbox(&mut config.battery_low_alerts, "Low-battery notifications")
+            .changed()
+        {
+            *config_dirty = true;
+        }
+        ui.add_enabled_ui(config.battery_low_alerts, |ui| {
+            if ui
+                .add(
+                    egui::Slider::new(&mut config.battery_warn_pct, 5..=50)
+                        .text("Warning threshold (%)"),
+                )
+                .changed()
+            {
+                if config.battery_critical_pct > config.battery_warn_pct {
+                    config.battery_critical_pct = config.battery_warn_pct;
+                }
+                *config_dirty = true;
+            }
+            if ui
+                .add(
+                    egui::Slider::new(&mut config.battery_critical_pct, 3..=30)
+                        .text("Critical threshold (%)"),
+                )
+                .changed()
+            {
+                if config.battery_critical_pct > config.battery_warn_pct {
+                    config.battery_warn_pct = config.battery_critical_pct;
+                }
+                *config_dirty = true;
+            }
+        });
     }
 }

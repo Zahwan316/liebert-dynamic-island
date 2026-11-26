@@ -1,6 +1,7 @@
 mod icons;
 mod settings;
 pub mod soft_render;
+pub mod taskbar;
 
 use std::collections::HashSet;
 use std::f32::consts::FRAC_PI_2;
@@ -16,6 +17,7 @@ use eframe::egui::{
 use eframe::epaint::{RectShape, Vertex, WHITE_UV};
 use eframe::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 
+use crate::battery::BatteryAlertTracker;
 use crate::calendar::{
     CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events,
 };
@@ -29,6 +31,7 @@ use crate::platform::{
 };
 use crate::pomodoro::{PomodoroPhase, PomodoroTimer};
 use crate::state::{IslandState, IslandVisualState, ListenerStatus, NotificationItem};
+use crate::sysmon::{SysmonCommand, SystemMetrics};
 use crate::todo::TodoStore;
 use crate::tray::{TrayAction, TrayController};
 use crate::ui::icons::{IconKind, icon_button, paint_icon};
@@ -130,6 +133,7 @@ enum IslandTab {
     Todo,
     Calendar,
     Pomodoro,
+    System,
 }
 
 /// Fixed transparent window size big enough for the largest card, so hover/notch animations
@@ -159,6 +163,7 @@ pub struct AppChannels {
     pub calendar_cmd_tx: mpsc::Sender<CalendarCommand>,
     pub ui_ctrl_rx: Option<mpsc::Receiver<UiControlEvent>>,
     pub daemon_tx: Option<mpsc::Sender<UiToDaemon>>,
+    pub sysmon_cmd_tx: Option<mpsc::Sender<SysmonCommand>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -223,6 +228,8 @@ pub struct IslandApp {
     hidden_since: Option<Instant>,
     allow_close: bool,
     pill_lyric_anim: PillLyricTransition,
+    system_metrics: SystemMetrics,
+    battery_alerts: BatteryAlertTracker,
 }
 
 impl IslandApp {
@@ -275,6 +282,8 @@ impl IslandApp {
                 "Syncing...".to_owned()
             },
             alerted_events: HashSet::new(),
+            system_metrics: SystemMetrics::default(),
+            battery_alerts: BatteryAlertTracker::default(),
             active_tab: IslandTab::Overview,
             show_settings: false,
             settings_focus_requested: false,
@@ -481,6 +490,18 @@ impl IslandApp {
         });
     }
 
+    pub fn system_metrics(&self) -> &SystemMetrics {
+        &self.system_metrics
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    pub fn is_fullscreen_hidden(&self) -> bool {
+        self.state.hide_in_fullscreen && self.state.fullscreen_active
+    }
+
     fn sync_tray(&self) {
         if let Some(tray) = &self.tray {
             tray.update_status(&self.state.listener_status, self.state.paused);
@@ -675,6 +696,27 @@ impl IslandApp {
                         self.calendar_status = err;
                     }
                 },
+                PlatformEvent::SystemMetrics(metrics) => {
+                    if let Some((title, body)) = self.battery_alerts.check(
+                        metrics.battery,
+                        self.config.battery_low_alerts,
+                        self.config.battery_warn_pct,
+                        self.config.battery_critical_pct,
+                    ) {
+                        self.state.push_notification(
+                            NotificationItem {
+                                id: format!("battery-low-{}", metrics.battery.map_or(0, |b| b.percent)),
+                                app_name: "Battery".to_owned(),
+                                title: title.to_owned(),
+                                body,
+                                icon_rgba: None,
+                                timestamp: 0,
+                            },
+                            now,
+                        );
+                    }
+                    self.system_metrics = metrics;
+                }
             }
         }
 
@@ -921,6 +963,14 @@ impl IslandApp {
         prev_lyric_opts: (bool, KaraokeLyricMode, bool, String),
         now: Instant,
     ) {
+        if let Some(tx) = &self.channels.sysmon_cmd_tx {
+            let _ = tx.send(SysmonCommand::SetConfig {
+                enabled: self.config.taskbar_monitor_enabled,
+                interval_ms: self.config.taskbar_interval_ms,
+                collect_disk: self.config.taskbar_show_disk,
+                collect_net: self.config.taskbar_show_network,
+            });
+        }
         let new_lyric_opts = (
             self.config.romaji_lyrics,
             self.config.karaoke_lyric_mode,
@@ -1577,6 +1627,14 @@ impl IslandApp {
         }
         if config_dirty {
             self.sync_runtime_config(&ctx, prev_lyric_opts, now);
+            if let Some(tx) = &self.channels.sysmon_cmd_tx {
+                let _ = tx.send(SysmonCommand::SetConfig {
+                    enabled: self.config.taskbar_monitor_enabled,
+                    interval_ms: self.config.taskbar_interval_ms,
+                    collect_disk: self.config.taskbar_show_disk,
+                    collect_net: self.config.taskbar_show_network,
+                });
+            }
             if let Some(tx) = &self.channels.daemon_tx {
                 let _ = tx.send(UiToDaemon::ConfigSaved(self.config.clone()));
             } else if let Err(err) = self.config.save() {
@@ -2272,6 +2330,15 @@ impl IslandApp {
                             s,
                         );
                     }
+                    render_pill_tab(
+                        ui,
+                        &mut self.active_tab,
+                        IslandTab::System,
+                        None,
+                        "Sys",
+                        accent,
+                        s,
+                    );
                 },
             );
             ui.add_space(6.0 * s);
@@ -2330,6 +2397,7 @@ impl IslandApp {
             IslandTab::Todo => self.render_todo_tab(ui),
             IslandTab::Calendar => self.render_calendar_tab(ui),
             IslandTab::Pomodoro => self.render_pomodoro_tab(ui, now),
+            IslandTab::System => self.render_system_tab(ui, ctx),
         }
     }
 
@@ -2440,6 +2508,168 @@ impl IslandApp {
                 self.active_tab = IslandTab::Pomodoro;
             }
         }
+
+        let bat_part = self
+            .system_metrics
+            .battery
+            .map(|b| format!(" • {} {}%", b.status.short_symbol(), b.percent))
+            .unwrap_or_default();
+        let sys_text = format!(
+            "CPU {:.0}% • RAM {:.0}%{}",
+            self.system_metrics.cpu_pct, self.system_metrics.ram_pct, bat_part
+        );
+        if render_overview_row(ui, IconKind::Settings, &sys_text, muted, s, true) {
+            self.active_tab = IslandTab::System;
+        }
+    }
+
+    fn render_system_tab(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let accent = self.effective_accent();
+        let text_col = self.text_color32();
+        let muted = self.muted_color32();
+        let s = self.config.scale;
+        let m = &self.system_metrics;
+
+        let draw_bar_row = |ui: &mut egui::Ui, label: &str, value: String, frac: f32, col: Color32| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(label)
+                        .font(FontId::proportional(11.0 * s))
+                        .color(muted),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(value)
+                            .font(FontId::proportional(11.0 * s))
+                            .color(text_col),
+                    );
+                });
+            });
+            let w = ui.available_width().max(40.0);
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(w, 4.0 * s), Sense::hover());
+            let cr = CornerRadius::same(2);
+            ui.painter()
+                .rect_filled(rect, cr, Color32::from_rgba_unmultiplied(255, 255, 255, 24));
+            let fill = Rect::from_min_size(
+                rect.min,
+                Vec2::new((rect.width() * frac.clamp(0.0, 1.0)).max(2.0), rect.height()),
+            );
+            ui.painter().rect_filled(fill, cr, col);
+            ui.add_space(4.0 * s);
+        };
+
+        draw_bar_row(
+            ui,
+            "CPU",
+            format!("{:.0}%", m.cpu_pct),
+            m.cpu_pct / 100.0,
+            accent,
+        );
+        draw_bar_row(
+            ui,
+            "RAM",
+            format!(
+                "{:.0}% ({:.1}/{:.0} GB)",
+                m.ram_pct, m.ram_used_gb, m.ram_total_gb
+            ),
+            m.ram_pct / 100.0,
+            accent,
+        );
+
+        if m.disk_used_pct.is_some() || m.disk_activity_pct.is_some() {
+            let pct = m.disk_activity_pct.or(m.disk_used_pct).unwrap_or(0.0);
+            let label = if m.disk_activity_pct.is_some() {
+                "Disk (C: act)"
+            } else {
+                "Disk (C: used)"
+            };
+            draw_bar_row(ui, label, format!("{pct:.0}%"), pct / 100.0, accent);
+        }
+
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Network")
+                    .font(FontId::proportional(11.0 * s))
+                    .color(muted),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "↓ {}  ↑ {}",
+                        crate::sysmon::format_speed_bps(m.net_down_bps),
+                        crate::sysmon::format_speed_bps(m.net_up_bps)
+                    ))
+                    .font(FontId::proportional(11.0 * s))
+                    .color(text_col),
+                );
+            });
+        });
+
+        if let Some(bat) = m.battery {
+            ui.add_space(4.0 * s);
+            let rem = bat
+                .remaining_secs
+                .map(|sec| format!(" ({})", crate::battery::format_remaining(sec)))
+                .unwrap_or_default();
+            ui.label(
+                RichText::new(format!(
+                    "{} Battery: {}% — {}{}",
+                    bat.status.short_symbol(),
+                    bat.percent,
+                    bat.status.label(),
+                    rem
+                ))
+                .font(FontId::proportional(11.0 * s))
+                .color(text_col),
+            );
+        }
+
+        ui.add_space(6.0 * s);
+        ui.horizontal(|ui| {
+            let tb_label = if self.config.taskbar_monitor_enabled {
+                "Taskbar: On"
+            } else {
+                "Taskbar: Off"
+            };
+            if ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(tb_label)
+                            .font(FontId::proportional(10.5 * s))
+                            .color(text_col),
+                    )
+                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 20))
+                    .corner_radius(CornerRadius::same(10)),
+                )
+                .clicked()
+            {
+                let prev_lyric_opts = (
+                    self.config.romaji_lyrics,
+                    self.config.karaoke_lyric_mode,
+                    self.config.translate_lyrics,
+                    self.config.lyric_translate_lang.clone(),
+                );
+                self.config.taskbar_monitor_enabled = !self.config.taskbar_monitor_enabled;
+                self.sync_runtime_config(ctx, prev_lyric_opts, Instant::now());
+                let _ = self.config.save();
+                ctx.request_repaint();
+            }
+
+            if ui
+                .add(
+                    egui::Button::new(
+                        RichText::new("Settings")
+                            .font(FontId::proportional(10.5 * s))
+                            .color(muted),
+                    )
+                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 14))
+                    .corner_radius(CornerRadius::same(10)),
+                )
+                .clicked()
+            {
+                self.open_settings(SettingsTab::System, ctx);
+            }
+        });
     }
 
     fn render_pomodoro_tab(&mut self, ui: &mut egui::Ui, now: Instant) {

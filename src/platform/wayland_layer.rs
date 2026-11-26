@@ -624,6 +624,7 @@ pub fn try_run_layer_shell(
             calendar_cmd_tx,
             ui_ctrl_rx: None,
             daemon_tx: None,
+            sysmon_cmd_tx: None,
         },
         tray,
         demo_mode,

@@ -37,6 +37,7 @@ use crate::config::Config;
 use crate::ipc::DaemonSnapshot;
 use crate::lyrics;
 use crate::platform::{self, windows as win_platform};
+use crate::sysmon::{self, SystemMetrics};
 use crate::tray::TrayController;
 use crate::ui::soft_render::SoftCanvas;
 use crate::ui::{
@@ -393,6 +394,7 @@ pub fn try_run_layered_direct(
     let (lyrics_req_tx, lyrics_req_rx) = mpsc::channel();
     let (media_cmd_tx, media_cmd_rx) = mpsc::channel();
     let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel();
+    let (sysmon_cmd_tx, sysmon_cmd_rx) = mpsc::channel();
 
     platform::spawn_listener(event_tx.clone(), wake.clone());
     platform::spawn_media_listener(event_tx.clone(), media_cmd_rx, wake.clone());
@@ -401,6 +403,15 @@ pub fn try_run_layered_direct(
     calendar::spawn_calendar_worker(
         config.google_calendar_ics_url.clone(),
         calendar_cmd_rx,
+        event_tx.clone(),
+        wake.clone(),
+    );
+    sysmon::spawn_sysmon_worker(
+        sysmon_cmd_rx,
+        config.taskbar_monitor_enabled,
+        config.taskbar_interval_ms,
+        config.taskbar_show_disk,
+        config.taskbar_show_network,
         event_tx,
         wake,
     );
@@ -414,6 +425,7 @@ pub fn try_run_layered_direct(
             calendar_cmd_tx,
             ui_ctrl_rx: None,
             daemon_tx: None,
+            sysmon_cmd_tx: Some(sysmon_cmd_tx),
         },
         tray,
         demo_mode,
@@ -524,6 +536,7 @@ fn run_layered_loop(
             return Err(err);
         }
     };
+    let mut taskbar_win = TaskbarLayeredWindow::default();
     unsafe { ReleaseDC(None, screen_dc) };
 
     let egui_ctx = egui::Context::default();
@@ -767,6 +780,13 @@ fn run_layered_loop(
             }
         }
 
+        taskbar_win.sync(
+            app.config(),
+            app.system_metrics(),
+            app.is_fullscreen_hidden(),
+            &start_time,
+        );
+
         let desired_timer_ms = if step.repaint_after.is_zero() {
             8
         } else {
@@ -791,4 +811,202 @@ fn run_layered_loop(
     }
 
     Ok(())
+}
+
+#[derive(Default)]
+struct TaskbarLayeredWindow {
+    hwnd: Option<HWND>,
+    dib: Option<LayeredDib>,
+    canvas: Option<SoftCanvas>,
+    egui_ctx: Option<egui::Context>,
+    last_metrics: Option<SystemMetrics>,
+    last_cfg_key: Option<(bool, bool, bool, bool, bool, crate::config::TaskbarFormat, crate::config::TaskbarPosition)>,
+    visible: bool,
+}
+
+impl Drop for TaskbarLayeredWindow {
+    fn drop(&mut self) {
+        if let Some(hwnd) = self.hwnd.take()
+            && !hwnd.is_invalid()
+        {
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+        }
+    }
+}
+
+impl TaskbarLayeredWindow {
+    fn sync(
+        &mut self,
+        config: &Config,
+        metrics: &SystemMetrics,
+        fullscreen_hidden: bool,
+        start_time: &Instant,
+    ) {
+        let should_show = config.taskbar_monitor_enabled && !fullscreen_hidden;
+        if !should_show {
+            if self.visible
+                && let Some(hwnd) = self.hwnd
+                && !hwnd.is_invalid()
+            {
+                unsafe {
+                    let _ = ShowWindow(hwnd, windows::Win32::UI::WindowsAndMessaging::SW_HIDE);
+                }
+                self.visible = false;
+            }
+            return;
+        }
+
+        let cfg_key = (
+            config.taskbar_show_cpu,
+            config.taskbar_show_ram,
+            config.taskbar_show_disk,
+            config.taskbar_show_network,
+            config.taskbar_show_battery,
+            config.taskbar_format,
+            config.taskbar_position,
+        );
+        if self.visible
+            && self.last_metrics.as_ref() == Some(metrics)
+            && self.last_cfg_key.as_ref() == Some(&cfg_key)
+        {
+            return;
+        }
+
+        let Some(geom) = platform::query_taskbar_geometry() else {
+            return;
+        };
+
+        if self.hwnd.is_none() {
+            let class_name = HSTRING::from(OVERLAY_CLASS_NAME);
+            let title = HSTRING::from("Liebert Taskbar Monitor");
+            let hinst = HINSTANCE(std::ptr::null_mut());
+            let hwnd = unsafe {
+                CreateWindowExW(
+                    WS_EX_LAYERED
+                        | WS_EX_TRANSPARENT
+                        | WS_EX_NOACTIVATE
+                        | WS_EX_TOOLWINDOW
+                        | WS_EX_TOPMOST,
+                    PCWSTR(class_name.as_ptr()),
+                    PCWSTR(title.as_ptr()),
+                    WS_POPUP,
+                    0,
+                    0,
+                    1,
+                    1,
+                    None,
+                    None,
+                    Some(hinst),
+                    None,
+                )
+            };
+            let Ok(hwnd) = hwnd else {
+                return;
+            };
+            if hwnd.is_invalid() {
+                return;
+            }
+            let screen_dc = unsafe { GetDC(None) };
+            if screen_dc.is_invalid() {
+                unsafe {
+                    let _ = DestroyWindow(hwnd);
+                }
+                return;
+            }
+            let dib = LayeredDib::new(screen_dc);
+            unsafe { ReleaseDC(None, screen_dc) };
+            let Ok(dib) = dib else {
+                unsafe {
+                    let _ = DestroyWindow(hwnd);
+                }
+                return;
+            };
+            let ctx = egui::Context::default();
+            ui::apply_configured_fonts(&ctx, &config.font_name);
+            self.hwnd = Some(hwnd);
+            self.dib = Some(dib);
+            self.canvas = Some(SoftCanvas::new());
+            self.egui_ctx = Some(ctx);
+        }
+
+        let Some(hwnd) = self.hwnd else { return };
+        let Some(dib) = self.dib.as_mut() else { return };
+        let Some(canvas) = self.canvas.as_mut() else { return };
+        let Some(ctx) = self.egui_ctx.as_ref() else { return };
+
+        let logical_size = ui::taskbar::estimate_taskbar_size(config, metrics);
+        let (x_px, y_px, w_px, h_px) =
+            ui::taskbar::compute_taskbar_widget_rect(&geom, config.taskbar_position, logical_size);
+        let ppp = geom.dpi_scale.max(1.0);
+        let phys_w = (w_px as u32).max(1);
+        let phys_h = (h_px as u32).max(1);
+
+        let raw_input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, logical_size)),
+            time: Some(start_time.elapsed().as_secs_f64()),
+            ..Default::default()
+        };
+        ctx.set_pixels_per_point(ppp);
+        let full_output = ctx.run_ui(raw_input, |ui| {
+            ui::taskbar::render_taskbar_ui(ui, config, metrics);
+        });
+        let clipped = ctx.tessellate(full_output.shapes, ppp);
+        canvas.update_textures_before_paint(&full_output.textures_delta);
+
+        let screen_dc = unsafe { GetDC(None) };
+        if !screen_dc.is_invalid() {
+            if let Ok(pixels) = dib.ensure_size(screen_dc, phys_w, phys_h) {
+                canvas.rasterize(phys_w, phys_h, ppp, &clipped, pixels, true);
+                let pt_dst = POINT { x: x_px, y: y_px };
+                let sz = SIZE {
+                    cx: phys_w as i32,
+                    cy: phys_h as i32,
+                };
+                let pt_src = POINT { x: 0, y: 0 };
+                let blend = BLENDFUNCTION {
+                    BlendOp: AC_SRC_OVER as u8,
+                    BlendFlags: 0,
+                    SourceConstantAlpha: 255,
+                    AlphaFormat: AC_SRC_ALPHA as u8,
+                };
+                let _ = unsafe {
+                    UpdateLayeredWindow(
+                        hwnd,
+                        Some(screen_dc),
+                        Some(&pt_dst),
+                        Some(&sz),
+                        Some(dib.mem_dc),
+                        Some(&pt_src),
+                        COLORREF(0),
+                        Some(&blend),
+                        ULW_ALPHA,
+                    )
+                };
+            }
+            unsafe { ReleaseDC(None, screen_dc) };
+        }
+        canvas.free_textures_after_paint(full_output.textures_delta);
+
+        if !self.visible {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            }
+            self.visible = true;
+        }
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+        self.last_metrics = Some(metrics.clone());
+        self.last_cfg_key = Some(cfg_key);
+    }
 }
