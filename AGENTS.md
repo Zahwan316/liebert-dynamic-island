@@ -40,3 +40,9 @@ Root vault Obsidian proyek berada di `/docs` (`.obsidian/` tetap di `.gitignore`
 2. **`docs/02 - Daftar Tugas & Backlog.md` & `docs/00 - Dashboard Proyek.md`:** Ubah `- [ ]` menjadi `- [x]` untuk tugas atau milestone yang benar-benar selesai dan terverifikasi.
 3. **`docs/01 - Arsitektur & Spesifikasi.md` & `docs/03 - Catatan Rapat & Keputusan.md`:** Perbarui bila struktur modul, skema data, atau keputusan teknis berubah.
 4. **Konfirmasi Akhir:** Sebutkan daftar catatan `/docs` yang diperbarui di akhir respons.
+
+## 6. Standing Release & Packaging Workflow (User Preference)
+- Setiap perubahan selesai pada suatu request, **biasakan otomatis**:
+  1. **Naikkan versi** (`0.1.x` → `0.1.(x+1)`) pada `Cargo.toml`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/{PKGBUILD,.SRCINFO}`, string versi internal (`src/platform/linux.rs`, `src/lyrics.rs`), dan `README.md` (plus `Cargo.lock` via Cargo).
+  2. **Build AppImage Linux** (`./scripts/build-linux-release.sh` → `dist/*.AppImage` & `dist/*.tar.gz`) serta **Windows Installer** (`installer/windows/installer.nsi` — bangun langsung bila `makensis`/Windows toolchain tersedia pada host, atau laporkan jujur bila host Linux tidak memiliki toolchain Windows/NSIS sementara workflow CI `.github/workflows/release.yml` menanganinya).
+  3. **Sinkronkan `/docs`**, buat commit bersih, dan **auto-push ke branch yang sedang aktif** (`git push origin <current-branch>`).

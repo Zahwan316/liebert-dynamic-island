@@ -183,7 +183,7 @@ pub struct IslandApp {
     last_lyrics_key: Option<(String, String)>,
     last_lyrics_had_duration: bool,
     album_art_tex: Option<TextureHandle>,
-    album_art_key: Option<(String, String)>,
+    album_art_key: Option<(String, String, Option<usize>)>,
     gradient_tex: Option<TextureHandle>,
     gradient_key: Option<([u8; 4], [u8; 3], bool)>,
     loaded_cjk_scripts: u8,
@@ -354,7 +354,7 @@ impl IslandApp {
             ("WhatsApp", "Budi", "Meeting jam 14:00 jadi pindah ke Discord?"),
             ("Discord", "#general — Alex", "Deploy staging barusan sukses, cek log!"),
             ("Gmail", "GitHub", "[liebert-dynamic-island] PR #12 merged"),
-            ("Google Chrome", "Download Complete", "release-v0.1.1-x86_64.zip siap dibuka"),
+            ("Google Chrome", "Download Complete", "release-v0.1.2-x86_64.zip siap dibuka"),
         ];
         let idx = (self.test_notif_seq as usize) % samples.len();
         self.test_notif_seq = self.test_notif_seq.wrapping_add(1);
@@ -896,13 +896,15 @@ impl IslandApp {
             self.gradient_key = None;
             return;
         };
+        let art_ptr = track.album_art.as_ref().map(|a| Arc::as_ptr(a) as usize);
         if let Some(prev) = &self.album_art_key
             && prev.0 == track.artist
             && prev.1 == track.title
+            && prev.2 == art_ptr
         {
             return;
         }
-        self.album_art_key = Some((track.artist.clone(), track.title.clone()));
+        self.album_art_key = Some((track.artist.clone(), track.title.clone(), art_ptr));
         if let Some(art) = &track.album_art {
             let img = ColorImage::from_rgba_unmultiplied([art.width, art.height], &art.rgba);
             if let Some(tex) = &mut self.album_art_tex {

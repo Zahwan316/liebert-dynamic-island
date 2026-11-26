@@ -559,7 +559,7 @@ impl NotificationServer {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("liebert-dynamic-island", "Liebert", "0.1.1", "1.2")
+        ("liebert-dynamic-island", "Liebert", "0.1.2", "1.2")
     }
 }
 
@@ -632,9 +632,13 @@ pub fn spawn_media_listener(
         .name("linux-mpris-media".to_owned())
         .spawn(move || {
             let mut sync_state: Option<MprisSyncState> = None;
-            let mut cached_art: CachedAlbumArt = None;
+            let mut cached_art: Option<ArtCacheState> = None;
             let mut active_bus: Option<String> = None;
             let mut active_track_id: Option<String> = None;
+            let art_agent: ureq::Agent = ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_secs(6)))
+                .build()
+                .into();
             let _ = zbus::block_on(async move {
                 let conn = Connection::session().await?;
                 let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
@@ -683,7 +687,7 @@ pub fn spawn_media_listener(
                     let sample = if let Some(ref bus) = chosen_bus
                         && let Some(props) = props_proxies.get(bus)
                     {
-                        read_mpris_sample(props, &mut cached_art).await
+                        read_mpris_sample(props, &art_agent, &mut cached_art).await
                     } else {
                         cached_art = None;
                         active_track_id = None;
@@ -1006,7 +1010,64 @@ async fn pick_active_mpris_bus(
     best.map(|(_, bus)| bus.clone())
 }
 
-type CachedAlbumArt = Option<((String, String), Option<Arc<AlbumArt>>)>;
+struct ArtCacheState {
+    key: (String, String),
+    art_url: Option<String>,
+    art: Option<Arc<AlbumArt>>,
+    failures: u8,
+    retry_at: Instant,
+}
+
+impl ArtCacheState {
+    fn resolve(
+        cache: &mut Option<Self>,
+        key: &(String, String),
+        art_url: Option<&str>,
+        now: Instant,
+    ) -> Option<Option<Arc<AlbumArt>>> {
+        let state = cache.as_ref()?;
+        if &state.key != key || state.art_url.as_deref() != art_url {
+            return None;
+        }
+        if state.art.is_some() {
+            return Some(state.art.clone());
+        }
+        if art_url.is_some() && state.failures < 3 && now >= state.retry_at {
+            return None;
+        }
+        Some(None)
+    }
+
+    fn record(
+        cache: &mut Option<Self>,
+        key: (String, String),
+        art_url: Option<String>,
+        art: Option<Arc<AlbumArt>>,
+        now: Instant,
+    ) {
+        let same_slot = cache
+            .as_ref()
+            .is_some_and(|s| s.key == key && s.art_url == art_url);
+        let prev_failures = if same_slot {
+            cache.as_ref().map(|s| s.failures).unwrap_or(0)
+        } else {
+            0
+        };
+        let failures = if art.is_some() || art_url.is_none() {
+            0
+        } else {
+            prev_failures.saturating_add(1)
+        };
+        let wait_secs = if failures <= 1 { 2 } else { 4 };
+        *cache = Some(Self {
+            key,
+            art_url,
+            art,
+            failures,
+            retry_at: now + Duration::from_secs(wait_secs),
+        });
+    }
+}
 
 struct MprisSample {
     track: MediaTrack,
@@ -1024,7 +1085,8 @@ async fn read_live_position_us(props: &Proxy<'_>) -> Option<i64> {
 
 async fn read_mpris_sample(
     props: &Proxy<'_>,
-    cached_art: &mut CachedAlbumArt,
+    art_agent: &ureq::Agent,
+    cached_art: &mut Option<ArtCacheState>,
 ) -> Option<MprisSample> {
     let all: HashMap<String, OwnedVariant> = props
         .call("GetAll", &("org.mpris.MediaPlayer2.Player",))
@@ -1073,14 +1135,17 @@ async fn read_mpris_sample(
     let (title, artist, duration_ms, track_id, art_url) = extract_metadata_fields(dict)?;
 
     let key = (title.clone(), artist.clone());
-    let album_art = if let Some((cached_key, art)) = cached_art.as_ref()
-        && *cached_key == key
+    let now_art = Instant::now();
+    let album_art = if let Some(cached) =
+        ArtCacheState::resolve(cached_art, &key, art_url.as_deref(), now_art)
     {
-        art.clone()
+        cached
     } else {
         let fetch_started = Instant::now();
-        let art = art_url.as_deref().and_then(load_art_from_url);
-        *cached_art = Some((key, art.clone()));
+        let art = art_url
+            .as_deref()
+            .and_then(|url| load_art_from_url(art_agent, url));
+        ArtCacheState::record(cached_art, key, art_url, art.clone(), Instant::now());
         // Re-sample Position if album art fetch spent network/disk time so timeline stays locked.
         if is_playing && fetch_started.elapsed() > Duration::from_millis(40)
             && let Some(fresh_us) = read_live_position_us(props).await
@@ -1129,7 +1194,8 @@ fn extract_metadata_fields(dict: &Dict<'_, '_>) -> Option<ExtractedMeta> {
         .map(|us| (us / 1000).max(0) as u64)
         .unwrap_or(0);
     let track_id = dict_str(dict, "mpris:trackid");
-    let art_url = dict_str(dict, "mpris:artUrl");
+    let art_url = dict_str(dict, "mpris:artUrl")
+        .or_else(|| dict_string_list(dict, "mpris:artUrl").into_iter().next());
 
     Some((title, artist, duration_ms, track_id, art_url))
 }
@@ -1218,8 +1284,7 @@ fn dict_micros(dict: &Dict<'_, '_>, key: &str) -> Option<i64> {
         .and_then(|v| variant_to_micros(&v))
 }
 
-fn decode_file_uri(uri: &str) -> Option<String> {
-    let raw = uri.strip_prefix("file://")?;
+fn decode_percent_bytes(raw: &str) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(raw.len());
     let src = raw.as_bytes();
     let mut i = 0;
@@ -1236,6 +1301,21 @@ fn decode_file_uri(uri: &str) -> Option<String> {
         bytes.push(src[i]);
         i += 1;
     }
+    bytes
+}
+
+fn decode_file_uri(uri: &str) -> Option<String> {
+    let trimmed = uri.trim();
+    let raw = if let Some(rest) = trimmed.strip_prefix("file://localhost/") {
+        format!("/{rest}")
+    } else if let Some(rest) = trimmed.strip_prefix("file://") {
+        rest.to_owned()
+    } else if trimmed.starts_with('/') {
+        trimmed.to_owned()
+    } else {
+        return None;
+    };
+    let bytes = decode_percent_bytes(&raw);
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -1245,26 +1325,111 @@ fn file_stem_from_uri(uri: &str) -> Option<String> {
     (!stem.is_empty()).then(|| stem.to_owned())
 }
 
-fn load_art_from_url(url: &str) -> Option<Arc<AlbumArt>> {
-    if let Some(path) = decode_file_uri(url) {
-        let bytes = std::fs::read(path).ok()?;
+fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    const MAX_B64_BYTES: usize = 6 * 1024 * 1024;
+    if input.len() > MAX_B64_BYTES {
+        return None;
+    }
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buf = 0u32;
+    let mut bits = 0u8;
+    for b in input.bytes() {
+        let val = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' | b' ' | b'\n' | b'\r' | b'\t' => continue,
+            _ => return None,
+        };
+        buf = (buf << 6) | u32::from(val);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            if out.len() > 4 * 1024 * 1024 {
+                return None;
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+fn decode_data_image_uri(uri: &str) -> Option<Vec<u8>> {
+    let rest = uri.trim().strip_prefix("data:")?;
+    let (meta, payload) = rest.split_once(',')?;
+    if !meta.to_ascii_lowercase().starts_with("image/") {
+        return None;
+    }
+    if meta.to_ascii_lowercase().contains(";base64") {
+        decode_base64(payload)
+    } else {
+        let bytes = decode_percent_bytes(payload);
+        (!bytes.is_empty() && bytes.len() <= 4 * 1024 * 1024).then_some(bytes)
+    }
+}
+
+fn art_http_candidates(url: &str) -> Vec<String> {
+    let trimmed = url.trim();
+    let mut out = vec![trimmed.to_owned()];
+    for prefix in [
+        "https://open.spotify.com/image/",
+        "http://open.spotify.com/image/",
+    ] {
+        if let Some(id) = trimmed.strip_prefix(prefix)
+            && !id.is_empty()
+        {
+            out.push(format!("https://i.scdn.co/image/{id}"));
+        }
+    }
+    out
+}
+
+fn read_local_art_file(path: &str) -> Option<Vec<u8>> {
+    if let Ok(bytes) = std::fs::read(path) {
+        return Some(bytes);
+    }
+    if let Some((clean, _)) = path.split_once(['?', '#'])
+        && let Ok(bytes) = std::fs::read(clean)
+    {
+        return Some(bytes);
+    }
+    None
+}
+
+fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(bytes) = decode_data_image_uri(trimmed) {
         return decode_album_art(&bytes);
     }
-    if url.starts_with("https://") || url.starts_with("http://") {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(3)))
-            .build();
-        let agent: ureq::Agent = config.into();
-        let bytes = agent
-            .get(url)
-            .call()
-            .ok()?
-            .body_mut()
-            .with_config()
-            .limit(4 * 1024 * 1024)
-            .read_to_vec()
-            .ok()?;
+    if let Some(path) = decode_file_uri(trimmed) {
+        let bytes = read_local_art_file(&path)?;
         return decode_album_art(&bytes);
+    }
+    if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
+        for candidate in art_http_candidates(trimmed) {
+            if let Ok(mut resp) = agent
+                .get(&candidate)
+                .header(
+                    "User-Agent",
+                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.2",
+                )
+                .header("Accept", "image/webp,image/png,image/jpeg,image/*,*/*;q=0.8")
+                .call()
+                && let Ok(bytes) = resp
+                    .body_mut()
+                    .with_config()
+                    .limit(4 * 1024 * 1024)
+                    .read_to_vec()
+                && let Some(art) = decode_album_art(&bytes)
+            {
+                return Some(art);
+            }
+        }
     }
     None
 }
@@ -1387,8 +1552,64 @@ mod tests {
             Some("/home/user/My Music/cover#1.jpg")
         );
         assert_eq!(
+            decode_file_uri("file://localhost/tmp/Album%20Art.png").as_deref(),
+            Some("/tmp/Album Art.png")
+        );
+        assert_eq!(
+            decode_file_uri("/var/tmp/raw_cover.jpg").as_deref(),
+            Some("/var/tmp/raw_cover.jpg")
+        );
+        assert_eq!(
             file_stem_from_uri("file:///tmp/Track%2001.flac").as_deref(),
             Some("Track 01")
+        );
+    }
+
+    #[test]
+    fn data_image_base64_and_spotify_art_cache_work() {
+        // Minimal valid 1x1 red PNG encoded as base64 data URI (Chromium/Firefox MPRIS artUrl).
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99,
+            0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+        ];
+        let b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+        assert_eq!(decode_base64(b64).as_deref(), Some(png_bytes));
+        let agent: ureq::Agent = ureq::Agent::config_builder().build().into();
+        let art = load_art_from_url(&agent, &format!("data:image/png;base64,{b64}"))
+            .expect("decode data:image PNG");
+        assert_eq!(art.width, 160);
+        assert_eq!(art.height, 160);
+        assert_eq!(art.rgba.len(), 160 * 160 * 4);
+
+        let cands = art_http_candidates("https://open.spotify.com/image/ab67616d00001e02");
+        assert_eq!(
+            cands,
+            vec![
+                "https://open.spotify.com/image/ab67616d00001e02".to_owned(),
+                "https://i.scdn.co/image/ab67616d00001e02".to_owned(),
+            ]
+        );
+
+        let t0 = Instant::now();
+        let key = ("Artist".to_owned(), "Track".to_owned());
+        let mut cache = None;
+        // Delayed artUrl arrival on poll 2 invalidates the initial `None` slot cleanly.
+        ArtCacheState::record(&mut cache, key.clone(), None, None, t0);
+        assert!(ArtCacheState::resolve(&mut cache, &key, Some("https://i.scdn.co/a"), t0).is_none());
+        ArtCacheState::record(
+            &mut cache,
+            key.clone(),
+            Some("https://i.scdn.co/a".to_owned()),
+            Some(art),
+            t0,
+        );
+        assert!(
+            ArtCacheState::resolve(&mut cache, &key, Some("https://i.scdn.co/a"), t0)
+                .flatten()
+                .is_some()
         );
     }
 }
