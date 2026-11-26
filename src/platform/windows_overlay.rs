@@ -7,8 +7,8 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Event, Modifiers, MouseWheelSource, MouseWheelUnit, PointerButton, Pos2, RawInput, Rect,
-    TouchPhase, Vec2,
+    self, Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, PointerButton, Pos2, RawInput,
+    Rect, TouchPhase, Vec2,
 };
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Dwm::{
@@ -19,6 +19,9 @@ use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC,
     GetDeviceCaps, HBITMAP, HDC, HGDIOBJ, LOGPIXELSX, ReleaseDC, SelectObject,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_LEFT, VK_RIGHT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GWL_EXSTYLE, GWLP_USERDATA, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HWND_TOPMOST,
@@ -27,7 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetProcessDPIAware, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
     ULW_ALPHA, UpdateLayeredWindow, WHEEL_DELTA, WM_APP, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WM_QUIT, WM_HOTKEY, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR};
@@ -141,6 +144,29 @@ unsafe extern "system" fn layered_wnd_proc(
                 }
                 return LRESULT(0);
             }
+            WM_HOTKEY => {
+                let key = match wparam.0 {
+                    1 => Key::ArrowLeft,
+                    2 => Key::ArrowRight,
+                    _ => return LRESULT(0),
+                };
+                state.pending_events.push(Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                });
+                state.pending_events.push(Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                });
+                state.needs_redraw = true;
+                return LRESULT(0);
+            }
             WM_DPICHANGED => {
                 let dpi_x = (wparam.0 & 0xFFFF) as u16 as f32;
                 if dpi_x > 0.0 {
@@ -214,15 +240,17 @@ impl LayeredDib {
             }
             self.bits = std::ptr::null_mut();
 
-            let mut bmi = BITMAPINFO::default();
-            bmi.bmiHeader = BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w as i32,
-                // Negative height selects top-down DIB rows matching SoftCanvas scanlines.
-                biHeight: -(h as i32),
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
+            let bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: w as i32,
+                    // Negative height selects top-down DIB rows matching SoftCanvas scanlines.
+                    biHeight: -(h as i32),
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let mut raw_bits: *mut c_void = std::ptr::null_mut();
@@ -556,6 +584,7 @@ fn run_layered_loop(
     let mut hidden_frame_committed = false;
     let mut shown_window = false;
     let mut active_timer_ms = 0u32;
+    let mut arrow_hotkeys_registered = false;
     let mut last_hovered = false;
 
     loop {
@@ -597,6 +626,20 @@ fn run_layered_loop(
         }
 
         let step = app.step_logic(&egui_ctx, OverlayBackendMode::WindowsLayered, false);
+        // Plain Left/Right hotkeys are registered only while the island is visible, so arrow
+        // navigation works without activating the layered window (and stops when it hides).
+        if step.visible != arrow_hotkeys_registered {
+            unsafe {
+                if step.visible {
+                    let _ = RegisterHotKey(Some(hwnd), 1, MOD_NOREPEAT, VK_LEFT.0 as u32);
+                    let _ = RegisterHotKey(Some(hwnd), 2, MOD_NOREPEAT, VK_RIGHT.0 as u32);
+                } else {
+                    let _ = UnregisterHotKey(Some(hwnd), 1);
+                    let _ = UnregisterHotKey(Some(hwnd), 2);
+                }
+            }
+            arrow_hotkeys_registered = step.visible;
+        }
         if step.want_exit {
             break;
         }
@@ -703,11 +746,11 @@ fn run_layered_loop(
                 };
 
                 egui_ctx.set_pixels_per_point(ppp);
-                let full_output = egui_ctx.run_ui(raw_input, |ui| {
+                let mut full_output = egui_ctx.run_ui(raw_input, |ui| {
                     app.render_island_ui(ui, false);
                 });
                 let clipped_primitives = egui_ctx.tessellate(full_output.shapes, ppp);
-                soft_canvas.update_textures_before_paint(&full_output.textures_delta);
+                soft_canvas.update_textures_before_paint(&mut full_output.textures_delta);
 
                 let screen_dc = unsafe { GetDC(None) };
                 if !screen_dc.is_invalid() {
@@ -807,6 +850,13 @@ fn run_layered_loop(
             unsafe { DispatchMessageW(&msg) };
         } else {
             break;
+        }
+    }
+
+    if arrow_hotkeys_registered {
+        unsafe {
+            let _ = UnregisterHotKey(Some(hwnd), 1);
+            let _ = UnregisterHotKey(Some(hwnd), 2);
         }
     }
 
@@ -949,11 +999,11 @@ impl TaskbarLayeredWindow {
             ..Default::default()
         };
         ctx.set_pixels_per_point(ppp);
-        let full_output = ctx.run_ui(raw_input, |ui| {
+        let mut full_output = ctx.run_ui(raw_input, |ui| {
             ui::taskbar::render_taskbar_ui(ui, config, metrics);
         });
         let clipped = ctx.tessellate(full_output.shapes, ppp);
-        canvas.update_textures_before_paint(&full_output.textures_delta);
+        canvas.update_textures_before_paint(&mut full_output.textures_delta);
 
         let screen_dc = unsafe { GetDC(None) };
         if !screen_dc.is_invalid() {

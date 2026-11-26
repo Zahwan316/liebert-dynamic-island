@@ -18,9 +18,35 @@ pub const SETTINGS_WINDOW_TITLE: &str = "Liebert Dynamic Island — Settings";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     Appearance,
+    Lyrics,
+    Features,
     System,
     Todo,
     Calendar,
+}
+
+impl SettingsTab {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Appearance => "Display",
+            Self::Lyrics => "Lyrics",
+            Self::Features => "Features",
+            Self::System => "System",
+            Self::Todo => "Tasks",
+            Self::Calendar => "Calendar",
+        }
+    }
+
+    fn all() -> [Self; 6] {
+        [
+            Self::Appearance,
+            Self::Lyrics,
+            Self::Features,
+            Self::System,
+            Self::Todo,
+            Self::Calendar,
+        ]
+    }
 }
 
 pub struct SettingsWindowState<'a> {
@@ -142,7 +168,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
         ViewportBuilder::default()
             .with_title(SETTINGS_WINDOW_TITLE)
             .with_app_id("liebert-dynamic-island-settings")
-            .with_inner_size([450.0, 540.0])
+            .with_inner_size([620.0, 560.0])
             .with_active(true)
             .with_resizable(true),
         move |ui, _class| {
@@ -247,30 +273,75 @@ struct SettingsBodyState<'a> {
 }
 
 fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
-    ui.horizontal(|ui| {
-        ui.selectable_value(st.tab, SettingsTab::Appearance, "Appearance");
-        ui.selectable_value(st.tab, SettingsTab::System, "System");
-        ui.selectable_value(st.tab, SettingsTab::Todo, "Todo List");
-        ui.selectable_value(st.tab, SettingsTab::Calendar, "Google Calendar");
-    });
-    ui.add_space(4.0);
-    ui.separator();
-    ui.add_space(4.0);
+    let left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+    let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
+    if !ui.ctx().memory(|m| m.focused().is_some()) && (left || right) {
+        let tabs = SettingsTab::all();
+        let pos = tabs.iter().position(|t| *t == *st.tab).unwrap_or(0);
+        let next = (pos as i32 + if left { -1 } else { 1 }).rem_euclid(tabs.len() as i32) as usize;
+        *st.tab = tabs[next];
+    }
 
-    egui::ScrollArea::vertical().show(ui, |ui| match *st.tab {
-        SettingsTab::Appearance => render_appearance_tab(
-            ui,
-            st.config,
-            st.config_dirty,
-            st.test_notification_requested,
-            st.installed_fonts,
-            st.font_search,
-        ),
-        SettingsTab::System => render_system_tab(ui, st.config, st.config_dirty),
-        SettingsTab::Todo => {
-            *st.todos_dirty |= render_todo_tab(ui, st.todos, st.new_todo_input);
-        }
-        SettingsTab::Calendar => render_calendar_tab(ui, st),
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(
+            Vec2::new(120.0, ui.available_height().max(220.0)),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                for tab in SettingsTab::all() {
+                    let selected = *st.tab == tab;
+                    let [ar, ag, ab] = st.config.accent_color;
+                    let fill = if selected {
+                        Color32::from_rgba_unmultiplied(ar, ag, ab, 60)
+                    } else {
+                        Color32::from_rgb(32, 32, 38)
+                    };
+                    let btn = egui::Button::new(
+                        RichText::new(tab.label())
+                            .color(if selected { Color32::WHITE } else { Color32::GRAY }),
+                    )
+                    .min_size(Vec2::new(112.0, 28.0))
+                    .fill(fill)
+                    .corner_radius(CornerRadius::same(8));
+                    if ui.add(btn).clicked() {
+                        *st.tab = tab;
+                    }
+                }
+            },
+        );
+        ui.add_space(10.0);
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width().max(240.0), ui.available_height().max(220.0)),
+            egui::Layout::top_down(egui::Align::Min),
+            |ui| {
+                ui.set_clip_rect(ui.max_rect());
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match *st.tab {
+                        SettingsTab::Appearance => render_display_tab(
+                            ui,
+                            st.config,
+                            st.config_dirty,
+                            st.installed_fonts,
+                            st.font_search,
+                        ),
+                        SettingsTab::Lyrics => {
+                            render_lyrics_tab(ui, st.config, st.config_dirty);
+                        }
+                        SettingsTab::Features => render_features_tab(
+                            ui,
+                            st.config,
+                            st.config_dirty,
+                            st.test_notification_requested,
+                        ),
+                        SettingsTab::System => render_system_tab(ui, st.config, st.config_dirty),
+                        SettingsTab::Todo => {
+                            *st.todos_dirty |= render_todo_tab(ui, st.todos, st.new_todo_input);
+                        }
+                        SettingsTab::Calendar => render_calendar_tab(ui, st),
+                    });
+            },
+        );
     });
 }
 
@@ -283,7 +354,38 @@ pub enum SettingsIpcTarget {
 pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<(), String> {
     use std::io::Write;
     use std::net::TcpStream;
+    use std::process::Command;
     use std::time::Duration;
+
+    // Try the software GL path first: on hosts with a software EGL config it avoids loading
+    // the multi-hundred-MB vendor GL/LLVM driver stack. If that config is unavailable eframe
+    // aborts before showing a window, so retry once with hardware acceleration preferred.
+    const GL_ATTEMPT_ENV: &str = "LIEBERT_SETTINGS_GL_ATTEMPT";
+    if std::env::var_os(GL_ATTEMPT_ENV).is_none() {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let args: Vec<_> = std::env::args_os().skip(1).collect();
+        let software_ok = Command::new(&exe)
+            .args(&args)
+            .env(GL_ATTEMPT_ENV, "software")
+            .env("LIEBERT_SETTINGS_SOFTWARE_GL", "1")
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if software_ok {
+            return Ok(());
+        }
+        let status = Command::new(&exe)
+            .args(&args)
+            .env(GL_ATTEMPT_ENV, "hardware")
+            .env_remove("LIEBERT_SETTINGS_SOFTWARE_GL")
+            .status()
+            .map_err(|e| e.to_string())?;
+        return if status.success() {
+            Ok(())
+        } else {
+            Err(format!("settings window exited with {status}"))
+        };
+    }
 
     let config = Config::load();
     let calendar_url_input = config.google_calendar_ics_url.clone();
@@ -395,12 +497,22 @@ pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<
         }
     }
 
+    let software_gl = std::env::var_os("LIEBERT_SETTINGS_SOFTWARE_GL").is_some();
+    let glow_options = egui_glow::GlowConfiguration {
+        hardware_acceleration: if software_gl {
+            egui_glow::HardwareAcceleration::Off
+        } else {
+            egui_glow::HardwareAcceleration::Preferred
+        },
+        ..Default::default()
+    };
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
+        glow_options,
         viewport: ViewportBuilder::default()
             .with_title(SETTINGS_WINDOW_TITLE)
             .with_app_id("liebert-dynamic-island-settings")
-            .with_inner_size([450.0, 540.0])
+            .with_inner_size([620.0, 560.0])
             .with_resizable(true),
         ..Default::default()
     };
@@ -426,11 +538,10 @@ pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<
     .map_err(|e| e.to_string())
 }
 
-fn render_appearance_tab(
+fn render_display_tab(
     ui: &mut egui::Ui,
     config: &mut Config,
     config_dirty: &mut bool,
-    test_notification_requested: &mut bool,
     installed_fonts: &mut Option<Vec<InstalledFont>>,
     font_search: &mut String,
 ) {
@@ -712,54 +823,12 @@ fn render_appearance_tab(
             .changed();
     });
 
-    ui.add_space(8.0);
-    ui.label(RichText::new("Modules & Auto-Hide").strong());
-    changed |= ui
-        .checkbox(&mut config.auto_hide_when_idle, "Auto-hide island when idle")
-        .changed();
-    changed |= ui
-        .add_enabled(
-            config.auto_hide_when_idle,
-            egui::Slider::new(&mut config.auto_hide_delay_secs, 0..=60)
-                .text("Auto-hide delay (s)"),
-        )
-        .changed();
-    if config.auto_hide_when_idle {
-        ui.label(
-            RichText::new("Tip: arahkan kursor ke tepi atas tengah layar untuk memunculkan notch kembali.")
-                .small()
-                .color(Color32::GRAY),
-        );
+    if changed {
+        *config_dirty = true;
     }
-    changed |= ui
-        .checkbox(
-            &mut config.hide_in_fullscreen,
-            "Hide when a fullscreen app/game is active",
-        )
-        .changed();
-    if config.hide_in_fullscreen {
-        ui.indent("fullscreen_sub_opts", |ui| {
-            changed |= ui
-                .checkbox(
-                    &mut config.hide_in_windowed_fullscreen,
-                    "Also hide on windowed fullscreen / maximized apps",
-                )
-                .changed();
-        });
-    }
-    ui.horizontal(|ui| {
-        changed |= ui
-            .checkbox(&mut config.show_notifications, "Show notification popups")
-            .changed();
-        if ui.button("Send Test Notification").clicked() {
-            *test_notification_requested = true;
-        }
-    });
-    ui.label(
-        RichText::new("Supports WhatsApp, Discord, Browser, Gmail, and Windows toasts")
-            .small()
-            .color(Color32::GRAY),
-    );
+}
+fn render_lyrics_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut bool) {
+    let mut changed = false;
     changed |= ui
         .checkbox(&mut config.show_lyrics, "Show Music & Synced Lyrics")
         .changed();
@@ -853,6 +922,65 @@ fn render_appearance_tab(
                 .changed();
         });
     }
+    if changed {
+        *config_dirty = true;
+    }
+}
+fn render_features_tab(
+    ui: &mut egui::Ui,
+    config: &mut Config,
+    config_dirty: &mut bool,
+    test_notification_requested: &mut bool,
+) {
+    let mut changed = false;
+    ui.add_space(8.0);
+    ui.label(RichText::new("Modules & Auto-Hide").strong());
+    changed |= ui
+        .checkbox(&mut config.auto_hide_when_idle, "Auto-hide island when idle")
+        .changed();
+    changed |= ui
+        .add_enabled(
+            config.auto_hide_when_idle,
+            egui::Slider::new(&mut config.auto_hide_delay_secs, 0..=60)
+                .text("Auto-hide delay (s)"),
+        )
+        .changed();
+    if config.auto_hide_when_idle {
+        ui.label(
+            RichText::new("Tip: arahkan kursor ke tepi atas tengah layar untuk memunculkan notch kembali.")
+                .small()
+                .color(Color32::GRAY),
+        );
+    }
+    changed |= ui
+        .checkbox(
+            &mut config.hide_in_fullscreen,
+            "Hide when a fullscreen app/game is active",
+        )
+        .changed();
+    if config.hide_in_fullscreen {
+        ui.indent("fullscreen_sub_opts", |ui| {
+            changed |= ui
+                .checkbox(
+                    &mut config.hide_in_windowed_fullscreen,
+                    "Also hide on windowed fullscreen / maximized apps",
+                )
+                .changed();
+        });
+    }
+    ui.horizontal(|ui| {
+        changed |= ui
+            .checkbox(&mut config.show_notifications, "Show notification popups")
+            .changed();
+        if ui.button("Send Test Notification").clicked() {
+            *test_notification_requested = true;
+        }
+    });
+    ui.label(
+        RichText::new("Supports WhatsApp, Discord, Browser, Gmail, and Windows toasts")
+            .small()
+            .color(Color32::GRAY),
+    );
     changed |= ui
         .checkbox(&mut config.show_todo, "Show Todo List tab")
         .changed();
@@ -1137,11 +1265,11 @@ fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut 
         });
     });
 
+    ui.add_space(12.0);
+    ui.separator();
+    ui.add_space(6.0);
+    ui.heading("Laptop Battery");
     if let Some(bat) = battery {
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(6.0);
-        ui.heading("Laptop Battery");
         let rem_str = bat
             .remaining_secs
             .map(|s| format!(" — {} remaining", format_remaining(s)))
@@ -1186,5 +1314,7 @@ fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut 
                 *config_dirty = true;
             }
         });
+    } else {
+        ui.label("No battery detected (desktop or unsupported device)");
     }
 }

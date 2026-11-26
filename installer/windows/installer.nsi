@@ -1,11 +1,12 @@
 ; NSIS installer for Liebert Dynamic Island.
-; Build from the repository root (paths below are relative to it):
-;   makensis /DAPP_VERSION=0.1.2 installer\windows\installer.nsi
+; Relative paths in NSIS are resolved from this script file, not the shell cwd.
+; Build from the repository root (or pass absolute STAGING_DIR/OUT_FILE):
+;   makensis /DAPP_VERSION=0.1.7 installer\windows\installer.nsi
 ; The staging directory must contain liebert-dynamic-island.exe, LICENSE.md and README.md.
 
 !define APP_NAME "Liebert Dynamic Island"
 !ifndef APP_VERSION
-!define APP_VERSION "0.1.2"
+!define APP_VERSION "0.1.7"
 !endif
 !define APP_PUBLISHER "Zahwan316"
 !define APP_EXE "liebert-dynamic-island.exe"
@@ -13,10 +14,10 @@
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Liebert Dynamic Island"
 
 !ifndef STAGING_DIR
-!define STAGING_DIR "dist\staging"
+!define STAGING_DIR "..\..\dist\staging"
 !endif
 !ifndef OUT_FILE
-!define OUT_FILE "dist\liebert-dynamic-island-windows-x86_64-setup.exe"
+!define OUT_FILE "..\..\dist\liebert-dynamic-island-windows-x86_64-setup.exe"
 !endif
 
 Name "${APP_NAME} ${APP_VERSION}"

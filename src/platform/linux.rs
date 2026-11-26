@@ -471,11 +471,53 @@ pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
     specs
 }
 
+pub fn bold_fallback_fonts() -> Vec<FontFileSpec> {
+    let mut specs = Vec::new();
+    if let Some(path) = first_existing_path(&[
+        "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
+    ])
+    .or_else(|| fc_match_file("sans-serif:bold"))
+    {
+        specs.push(FontFileSpec {
+            name: "linux_sans_bold".to_owned(),
+            path,
+            family: FontFamilyTarget::Bold,
+            face_indices: &[0],
+        });
+    }
+    specs
+}
+
 pub fn cjk_fallback_fonts_for(script: super::CjkScript) -> Vec<FontFileSpec> {
-    let (lang, ttc_face): (&str, &'static [u32]) = match script {
-        super::CjkScript::JapaneseOrHan => (":lang=ja", &[0]),
-        super::CjkScript::Korean => (":lang=ko", &[1]),
+    let (lang, bold_lang, ttc_face, suffix): (&str, &str, &'static [u32], &str) = match script {
+        super::CjkScript::JapaneseOrHan => (":lang=ja", ":lang=ja:bold", &[0], "jp"),
+        super::CjkScript::Korean => (":lang=ko", ":lang=ko:bold", &[1], "kr"),
     };
+    let mut specs = Vec::new();
+    if let Some(path) = first_existing_path(&[
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Bold.ttc",
+    ])
+    .or_else(|| fc_match_file(bold_lang))
+    {
+        let faces = if path.ends_with(".ttc") {
+            ttc_face
+        } else {
+            &[0][..]
+        };
+        specs.push(FontFileSpec {
+            name: format!("linux_noto_cjk_{suffix}_bold"),
+            path,
+            family: FontFamilyTarget::Bold,
+            face_indices: faces,
+        });
+    }
     if let Some(path) = first_existing_path(&[
         "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -488,18 +530,14 @@ pub fn cjk_fallback_fonts_for(script: super::CjkScript) -> Vec<FontFileSpec> {
         } else {
             &[0][..]
         };
-        let suffix = match script {
-            super::CjkScript::JapaneseOrHan => "jp",
-            super::CjkScript::Korean => "kr",
-        };
-        return vec![FontFileSpec {
+        specs.push(FontFileSpec {
             name: format!("linux_noto_cjk_{suffix}"),
             path,
-            family: FontFamilyTarget::Both,
+            family: FontFamilyTarget::All,
             face_indices: faces,
-        }];
+        });
     }
-    Vec::new()
+    specs
 }
 
 struct NotificationServer {
@@ -559,7 +597,7 @@ impl NotificationServer {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("liebert-dynamic-island", "Liebert", "0.1.2", "1.2")
+        ("liebert-dynamic-island", "Liebert", "0.1.7", "1.2")
     }
 }
 
@@ -1416,7 +1454,7 @@ fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
                 .get(&candidate)
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.2",
+                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.7",
                 )
                 .header("Accept", "image/webp,image/png,image/jpeg,image/*,*/*;q=0.8")
                 .call()
@@ -1580,9 +1618,9 @@ mod tests {
         let agent: ureq::Agent = ureq::Agent::config_builder().build().into();
         let art = load_art_from_url(&agent, &format!("data:image/png;base64,{b64}"))
             .expect("decode data:image PNG");
-        assert_eq!(art.width, 160);
-        assert_eq!(art.height, 160);
-        assert_eq!(art.rgba.len(), 160 * 160 * 4);
+        assert_eq!(art.width, 128);
+        assert_eq!(art.height, 128);
+        assert_eq!(art.rgba.len(), 128 * 128 * 4);
 
         let cands = art_http_candidates("https://open.spotify.com/image/ab67616d00001e02");
         assert_eq!(

@@ -8,10 +8,13 @@ use std::time::{Duration, Instant};
 use calloop::EventLoop;
 use calloop::ping::make_ping;
 use calloop_wayland_source::WaylandSource;
-use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+use eframe::egui::{self, Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::keyboard::{
+    KeyEvent, KeyboardHandler, Keysym, Modifiers as KeyboardModifiers,
+};
 use smithay_client_toolkit::seat::pointer::{
     BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, PointerEvent, PointerEventKind, PointerHandler,
 };
@@ -24,11 +27,11 @@ use smithay_client_toolkit::shell::wlr_layer::{
 use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
-    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, delegate_shm, registry_handlers,
+    delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
+    delegate_registry, delegate_seat, delegate_shm, registry_handlers,
 };
 use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
+use wayland_client::protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
 use wayland_client::{Connection, QueueHandle};
 
 use crate::calendar::{self, CalendarCommand};
@@ -59,6 +62,7 @@ struct WaylandState {
     layer: Option<LayerSurface>,
     empty_region: Option<Region>,
     pointer: Option<wl_pointer::WlPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
     configured: bool,
     ever_configured: bool,
     surface_closed: bool,
@@ -92,7 +96,10 @@ impl WaylandState {
         );
         layer.set_anchor(Anchor::TOP);
         layer.set_exclusive_zone(-1);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        // shortcut: winit/eframe have no wlr-layer-shell keyboard grab, so OnDemand is used to
+        // receive Left/Right only after the user clicks the island; upgrade when a proper
+        // compositor-agnostic global-shortcut protocol is available.
+        layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         layer.set_margin(margin_top, 0, 0, 0);
         layer.set_size(width.max(1), height.max(1));
         if !visible && let Some(region) = &self.empty_region {
@@ -289,6 +296,12 @@ impl SeatHandler for WaylandState {
         {
             self.pointer = Some(pointer);
         }
+        if capability == Capability::Keyboard
+            && self.keyboard.is_none()
+            && let Ok(keyboard) = self.seat_state.get_keyboard(qh, &seat, None)
+        {
+            self.keyboard = Some(keyboard);
+        }
     }
 
     fn remove_capability(
@@ -303,10 +316,92 @@ impl SeatHandler for WaylandState {
         {
             pointer.release();
         }
+        if capability == Capability::Keyboard
+            && let Some(keyboard) = self.keyboard.take()
+        {
+            keyboard.release();
+        }
     }
 
     fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
 }
+
+impl KeyboardHandler for WaylandState {
+    fn enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+        _raw: &[u32],
+        _keysyms: &[Keysym],
+    ) {
+    }
+
+    fn leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _surface: &wl_surface::WlSurface,
+        _serial: u32,
+    ) {
+    }
+
+    fn press_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        event: KeyEvent,
+    ) {
+        let key = match event.keysym {
+            Keysym::Left => Key::ArrowLeft,
+            Keysym::Right => Key::ArrowRight,
+            _ => return,
+        };
+        self.pending_events.push(Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        self.pending_events.push(Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        self.needs_redraw = true;
+    }
+
+    fn release_key(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        _event: KeyEvent,
+    ) {
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard,
+        _serial: u32,
+        _modifiers: KeyboardModifiers,
+        _layout: u32,
+    ) {
+    }
+}
+
+delegate_keyboard!(WaylandState);
 
 impl PointerHandler for WaylandState {
     fn pointer_frame(
@@ -539,6 +634,7 @@ pub fn try_run_layer_shell(
         layer: None,
         empty_region,
         pointer: None,
+        keyboard: None,
         configured: false,
         ever_configured: false,
         surface_closed: false,
@@ -596,6 +692,7 @@ pub fn try_run_layer_shell(
     let (lyrics_req_tx, lyrics_req_rx) = mpsc::channel();
     let (media_cmd_tx, media_cmd_rx) = mpsc::channel();
     let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel();
+    let (sysmon_cmd_tx, sysmon_cmd_rx) = mpsc::channel();
 
     let wake_ping = ping.clone();
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || wake_ping.ping());
@@ -607,6 +704,15 @@ pub fn try_run_layer_shell(
     calendar::spawn_calendar_worker(
         config.google_calendar_ics_url.clone(),
         calendar_cmd_rx,
+        event_tx.clone(),
+        wake.clone(),
+    );
+    crate::sysmon::spawn_sysmon_worker(
+        sysmon_cmd_rx,
+        config.taskbar_monitor_enabled,
+        config.taskbar_interval_ms,
+        config.taskbar_show_disk,
+        config.taskbar_show_network,
         event_tx,
         wake,
     );
@@ -624,7 +730,7 @@ pub fn try_run_layer_shell(
             calendar_cmd_tx,
             ui_ctrl_rx: None,
             daemon_tx: None,
-            sysmon_cmd_tx: None,
+            sysmon_cmd_tx: Some(sysmon_cmd_tx),
         },
         tray,
         demo_mode,
@@ -831,12 +937,12 @@ pub fn try_run_layer_shell(
         };
 
         egui_ctx.set_pixels_per_point(ppp);
-        let full_output = egui_ctx.run_ui(raw_input, |ui| {
+        let mut full_output = egui_ctx.run_ui(raw_input, |ui| {
             app.render_island_ui(ui, false);
         });
 
         let clipped_primitives = egui_ctx.tessellate(full_output.shapes, ppp);
-        soft_canvas.update_textures_before_paint(&full_output.textures_delta);
+        soft_canvas.update_textures_before_paint(&mut full_output.textures_delta);
 
         let stride = (phys_w_px * 4) as i32;
         if let Ok((buffer, bytes)) = pool.create_buffer(

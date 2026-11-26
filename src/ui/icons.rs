@@ -21,6 +21,8 @@ pub enum IconKind {
     RepeatOne,
     Close,
     Dot,
+    ChevronLeft,
+    ChevronRight,
 }
 
 pub fn icon_button(
@@ -60,6 +62,20 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, kind: IconKind, color: Co
     match kind {
         IconKind::Dot => {
             painter.circle_filled(c, s * 0.36, color);
+        }
+        IconKind::ChevronLeft => {
+            let tip = Pos2::new(c.x - s * 0.17, c.y);
+            let top = Pos2::new(c.x + s * 0.15, c.y - s * 0.26);
+            let bot = Pos2::new(c.x + s * 0.15, c.y + s * 0.26);
+            painter.line_segment([top, tip], stroke);
+            painter.line_segment([tip, bot], stroke);
+        }
+        IconKind::ChevronRight => {
+            let tip = Pos2::new(c.x + s * 0.17, c.y);
+            let top = Pos2::new(c.x - s * 0.15, c.y - s * 0.26);
+            let bot = Pos2::new(c.x - s * 0.15, c.y + s * 0.26);
+            painter.line_segment([top, tip], stroke);
+            painter.line_segment([tip, bot], stroke);
         }
         IconKind::Close => {
             let r = s * 0.28;

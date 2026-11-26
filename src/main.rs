@@ -52,24 +52,22 @@ fn main() -> ExitCode {
 
     #[cfg(any(windows, target_os = "linux"))]
     if args.iter().any(|a| a == "--settings") && !args.iter().any(|a| a == "--ui") {
-        let ipc_target = if let Some(addr) = args
+        let ipc_target = args
             .windows(2)
             .find(|w| w[0] == "--ipc-addr")
-            .map(|w| w[1].clone())
-        {
-            Some(SettingsIpcTarget::Tcp(addr))
-        } else {
-            #[cfg(unix)]
-            {
-                args.windows(2)
-                    .find(|w| w[0] == "--ipc-sock")
-                    .map(|w| SettingsIpcTarget::Unix(std::path::PathBuf::from(&w[1])))
-            }
-            #[cfg(not(unix))]
-            {
-                None
-            }
-        };
+            .map(|w| SettingsIpcTarget::Tcp(w[1].clone()))
+            .or({
+                #[cfg(unix)]
+                {
+                    args.windows(2)
+                        .find(|w| w[0] == "--ipc-sock")
+                        .map(|w| SettingsIpcTarget::Unix(std::path::PathBuf::from(&w[1])))
+                }
+                #[cfg(not(unix))]
+                {
+                    None
+                }
+            });
         return match ui::run_standalone_settings(ipc_target) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -181,6 +179,9 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
     let (media_cmd_tx, media_cmd_rx) = mpsc::channel::<MediaCommand>();
     let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel::<CalendarCommand>();
     let (daemon_tx, daemon_rx) = mpsc::channel::<UiToDaemon>();
+    let (sysmon_cmd_tx, sysmon_cmd_rx) = mpsc::channel::<crate::sysmon::SysmonCommand>();
+    let sysmon_event_tx = event_tx.clone();
+    let sysmon_config = config.clone();
 
     let reader_handle_and_writer = move |wake: Arc<dyn Fn() + Send + Sync>| {
         let wake_reader = wake;
@@ -228,7 +229,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                             let _ = event_tx.send(PlatformEvent::CalendarUpdated(res));
                         }
                         DaemonToUi::ConfigUpdated(cfg) => {
-                            let _ = ui_ctrl_tx.send(UiControlEvent::ConfigUpdated(cfg));
+                            let _ = ui_ctrl_tx.send(UiControlEvent::ConfigUpdated(Box::new(cfg)));
                         }
                         DaemonToUi::SetPaused(paused) => {
                             let _ = ui_ctrl_tx.send(UiControlEvent::SetPaused(paused));
@@ -295,6 +296,15 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
         let wake_ref = wake_hwnd.clone();
         let wake: Arc<dyn Fn() + Send + Sync> =
             Arc::new(move || platform::windows_overlay::post_wake_to_hwnd(&wake_ref));
+        crate::sysmon::spawn_sysmon_worker(
+            sysmon_cmd_rx,
+            sysmon_config.taskbar_monitor_enabled,
+            sysmon_config.taskbar_interval_ms,
+            sysmon_config.taskbar_show_disk,
+            sysmon_config.taskbar_show_network,
+            sysmon_event_tx,
+            wake.clone(),
+        );
         reader_handle_and_writer(wake);
         let channels = AppChannels {
             event_rx,
@@ -303,9 +313,9 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
             calendar_cmd_tx,
             ui_ctrl_rx: Some(ui_ctrl_rx),
             daemon_tx: Some(daemon_tx),
-            sysmon_cmd_tx: None,
+            sysmon_cmd_tx: Some(sysmon_cmd_tx),
         };
-        return match platform::windows_overlay::run_layered_ipc_client(
+        match platform::windows_overlay::run_layered_ipc_client(
             config,
             snapshot,
             channels,
@@ -317,7 +327,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                 eprintln!("Fatal Windows layered UI error: {err}");
                 ExitCode::FAILURE
             }
-        };
+        }
     }
 
     #[cfg(not(windows))]
@@ -365,6 +375,15 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                 let egui_ctx = cc.egui_ctx.clone();
                 let wake: Arc<dyn Fn() + Send + Sync> =
                     Arc::new(move || egui_ctx.request_repaint());
+                crate::sysmon::spawn_sysmon_worker(
+                    sysmon_cmd_rx,
+                    sysmon_config.taskbar_monitor_enabled,
+                    sysmon_config.taskbar_interval_ms,
+                    sysmon_config.taskbar_show_disk,
+                    sysmon_config.taskbar_show_network,
+                    sysmon_event_tx,
+                    wake.clone(),
+                );
                 reader_handle_and_writer(wake);
 
                 let mut app = IslandApp::new(
@@ -376,7 +395,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                         calendar_cmd_tx,
                         ui_ctrl_rx: Some(ui_ctrl_rx),
                         daemon_tx: Some(daemon_tx),
-                        sysmon_cmd_tx: None,
+                        sysmon_cmd_tx: Some(sysmon_cmd_tx),
                     },
                     None,
                     demo_mode,

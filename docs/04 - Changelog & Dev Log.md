@@ -8,6 +8,80 @@ tags:
 
 # 04 - Changelog & Dev Log
 
+## 2026-11-27
+
+### Changed (v0.1.7)
+
+- `src/ui/mod.rs`: Header mode Expanded kini **hanya** menampilkan tulisan tab aktif dan tombol Settings; strip tab, chevron header, dan toggle Notch/Island dihapus (toggle tetap tersedia di Settings → Display). Navigasi Left/Right sudah tersedia lewat keyboard, dan tombol chevron vektor dipindah ke **tengah tepi kiri/kanan kartu expanded** (`draw_side_nav`, `ui.interact` + `paint_icon`) sehingga tidak mengganggu baris header. Berlaku untuk Linux **dan** Windows karena keduanya memakai `render_island_ui`.
+- `src/ui/mod.rs`, `src/ui/settings.rs`: Panel System/Battery menampilkan teks eksplisit **`No battery detected`** bila `/sys/class/power_supply` tidak memiliki baterai (PC desktop), baik di tab System overlay maupun di Settings → System. Bila baterai ada, persentase/status/estimasi waktu tetap ditampilkan seperti sebelumnya.
+- `src/sysmon.rs`: Menambah test integrasi ringan `linux_sampler_reads_live_proc_metrics` yang memanggil sampler `/proc` nyata dan memastikan RAM/CPU terbaca, sebagai bukti system monitor Linux bekerja.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.7`**; AppImage + tar.gz Linux dibangun ulang. `cargo test` **67 passed**, clippy Linux + Windows-target bersih. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-025).
+
+### Added (v0.1.6)
+
+- `src/ui/icons.rs`, `src/ui/mod.rs`: Ikon panah kiri/kanan digambar sebagai **vektor** (`ChevronLeft`/`ChevronRight`) dan keduanya menjadi tombol klik yang benar-benar mengganti tab. Sebelumnya teks Unicode `◀ ▶` sering hilang pada instalasi Linux tanpa font yang mencakup U+25C0/U+25B6, sehingga indikator arrow tidak terlihat; tombol vektor juga memberi fallback bagi overlay click-through yang tidak bisa menerima fokus keyboard. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-024).
+- `src/platform/mod.rs`: Unit test `decode_album_art_accepts_common_large_cover_resolutions` mendekode cover JPEG `1280×720` (resolusi `maxresdefault` YouTube Music) dan memastikan hasil resize `128×72`, mencegah regresi batas decode.
+
+### Changed (v0.1.6)
+
+- `src/ui/mod.rs`: Layout tab **Music** expanded dikembalikan ke versi sebelum v0.1.5 (kolom cover/now-playing + lirik seperti semula, termasuk thumbnail `≈118 px`) pada Linux **dan** Windows; perubahan lyrics-full-width v0.1.5 dibatalkan.
+- `src/ui/mod.rs`: Cache tekstur album art tidak lagi memakai `Arc::as_ptr` sebagai kunci. Kini memakai hash konten (`width`, `height`, `rgba`, `dominant_rgb`) sehingga `Arc` baru dari IPC tidak memicu `tex.set()` berlebih, sekaligus mencegah alamat allocator yang dipakai ulang menyisakan cover lama saat piksel berubah.
+- `src/ui/settings.rs`, `Cargo.toml`, `Cargo.lock`: Jendela Settings tetap memakai `eframe` + `Renderer::Glow` (grup kiri/konten kanan dipertahankan), tetapi kini **mencoba software GL lebih dulu** (`egui_glow::HardwareAcceleration::Off`) sebelum jatuh ke `Preferred`. Upaya ini dapat menghindari pemuatan tumpakan driver GPU/LLVM ratusan MB bila konfigurasi EGL software tersedia; bila tidak, launcher secara otomatis memulai ulang dengan GL normal agar UI tetap berfungsi.
+
+### Fixed (v0.1.6)
+
+- `src/platform/mod.rs`: Batas decode album art dikembalikan ke `2048 px` / `16 MiB` (dari `1024 px` / `8 MiB` di v0.1.5). Batas v0.1.5 menolak cover populer `1280×720`/`1400×1400`, dan kegagalan decode tersebut dikunci oleh `ArtCacheState` sehingga cover tidak pernah muncul. Penghematan RAM tetap dipertahankan lewat output `128×128`, bukan dengan menolak sumber gambar yang valid.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi dinaikkan ke **`0.1.6`**; AppImage + tar.gz Linux dibangun ulang. `cargo test` **66 passed**, clippy Linux + Windows-target bersih. Installer NSIS final tetap diproduksi CI Windows (`makensis` tidak tersedia di host Linux).
+
+### Measured (v0.1.6)
+
+- Jendela Settings (host Linux dengan driver NVIDIA): `VmRSS 102,8 MB`, `Pss 69,0 MB`; `RssFile ≈80 MB` didominasi `libnvidia-gpucomp`, `libnvidia-eglcore`, dan `libLLVM`. Launcher sendiri hanya `VmRSS 7,3 MB`. Percobaan software GL ditolak glutin pada host ini (`failed to find a matching configuration`, juga dengan `LIBGL_ALWAYS_SOFTWARE=1`/`EGL_PLATFORM=x11|wayland|surfaceless`), sehingga fallback hardware dipakai. **Target `< 10 MB` belum tercapai** untuk jendela Settings; lihat ADR-024.
+- Overlay Wayland/Windows tidak berubah dari pengukuran v0.1.5 (`VmRSS ≈23,2 MB`); RSS Windows tidak dapat diukur dari host Linux.
+
+### Added
+
+- `src/sysmon.rs`, `src/battery.rs`, `src/main.rs`, `src/platform/wayland_layer.rs`, `src/platform/windows_overlay.rs`: Mengaktifkan tab **System** di Linux dengan sampler asli tanpa crate baru — CPU dari `/proc/stat`, RAM dari `/proc/meminfo`, disk dari `/proc/diskstats` + `df -P -k /`, jaringan dari `/proc/net/dev`, dan baterai dari `/sys/class/power_supply`. Worker sysmon kini di-spawn pada jalur Wayland layer-shell, klien `--ui` X11/eframe, dan klien overlay Windows; perubahan config diteruskan lewat `SysmonCommand::SetConfig`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-023).
+- `src/ui/mod.rs`, `src/ui/settings.rs`, `src/platform/windows_overlay.rs`, `src/platform/wayland_layer.rs`: Navigasi tab memakai **Left/Right** (wrap mengikuti modul aktif) di Linux dan Windows. Header strip tab atas dihapus — tersisa label tab aktif, tombol ganti Notch/Island, dan tombol Settings. Windows mendaftarkan hotkey `VK_LEFT`/`VK_RIGHT` hanya saat overlay tampil; Wayland memakai `KeyboardInteractivity::OnDemand` + `KeyboardHandler` (`// shortcut: ...`) karena winit/eframe belum memiliki keyboard grab `wlr-layer-shell`.
+
+### Changed
+
+- `src/ui/mod.rs`: Layout Home dipangkas (baris lebih rapat, timezoneBadge benar-benar terpusat), tab Music expanded kini **lyrics-first** (strip now-playing + playbar + kontrol transport, lalu lirik full-width), dan Settings memakai panel kiri bergrup (`Display`, `Lyrics`, `Features`, `System`, `Tasks`, `Calendar`) + panel kanan scrollable alih-alih strip horizontal.
+- `src/ui/soft_render.rs`, `src/platform/mod.rs`, `src/platform/linux.rs`, `Cargo.toml`: Optimasi RAM — delta tekstur `egui` dipindahkan (`Arc::get_mut`/`mem::take`) alih-alih di-clone, batas decode album art diturunkan ke `1024 px` / `8 MiB` dengan resize `128×128`, serta fitur `xkbcommon` ditambahkan ke `smithay-client-toolkit` agar keyboard Wayland bekerja.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi dinaikkan ke **`0.1.5`**; AppImage + tar.gz Linux dibangun ulang. `cargo test` **65 passed**, `cargo clippy --all-targets -- -D warnings` bersih, dan cross-check `x86_64-pc-windows-gnu` bersih. Installer NSIS final tidak dibangun di host Linux (tanpa `makensis`); workflow CI Windows yang memproduksinya. Lihat [[00 - Dashboard Proyek]].
+
+### Fixed
+
+- `src/sysmon.rs`, `src/battery.rs`: Mengoreksi kalkulasi CPU Linux agar total jiffies mencakup idle (sebelum ini idle dikurangi dua kali) dan konversi satuan baterai sysfs (`time_to_empty_now` µs → detik; `energy_now / power_now` jam → detik), dengan unit test baru.
+- `src/ui/soft_render.rs`, `src/platform/wayland_layer.rs`, `src/platform/windows_overlay.rs`: Membuat `full_output` mutable agar delta tekstur dapat dikonsumsi tanpa duplikasi, termasuk jalur taskbar Windows.
+
+### Measured
+
+- Overlay Wayland **`--demo`**: `VmRSS 23,2 MB`, `Pss 19,8 MB`, `RssAnon 7,6 MB` (proses overlay tunggal). Target batas maksimal `30 MB` tercapai, tetapi target idle `< 10 MB` **belum** tercapai karena halaman kode/font `egui` yang tetap tersentuh.
+- Fallback X11/eframe: daemon `VmRSS 15,6 MB` + child UI `VmRSS 83,8 MB` (`Pss` gabungan ≈ `84,4 MB`). Jalur ini **belum** memenuhi batas `30 MB`; belum ada overlay X11 berbasis `SoftCanvas` yang setara dengan Wayland/Windows. RSS Windows tidak dapat diukur dari host Linux; penghematan alokasi diterapkan tetapi tidak diklaim terverifikasi.
+
+### Fixed
+
+- `.github/workflows/release.yml`, `installer/windows/installer.nsi`: Memperbaiki kegagalan berulang job Windows pada langkah **Build Windows release binary, zip & installer**. Penyebabnya: NSIS me-resolve path relatif terhadap file skrip (`installer/windows/`), sehingga `File "dist\staging\..."` tidak menemukan binary yang sudah disalin di `dist\staging\` repository root. Workflow kini meneruskan `STAGING_DIR`/`OUT_FILE` **absolut** ke `makensis`, dan default skrip diubah menjadi `..\..\dist\staging` / `..\..\dist\...-setup.exe`. Skrip divalidasi dengan `makensis` (payload dummy) di container Docker; installer asli tetap dibangun CI Windows. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-022).
+- `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/windows_overlay.rs`, `src/main.rs`: Membersihkan error `clippy` khusus target Windows yang muncul setelah refactor overlay berlapis: helper eframe lama (`overlay_resizable`, `prepare_overlay_rules`, `set_overlay_visible`) ditandai `dead_code` untuk Windows, inisialisasi `BITMAPINFOHEADER` memakai struct literal alih-alih assignment `Default::default()`, parser `--ipc-addr`/`--ipc-sock` memakai `Option::or`, dan `return` berlebih di cabang layered client dihapus. `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` kini bersih.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Menaikkan versi menjadi **`0.1.4`** sesuai alur rilis standar dan membangun ulang `dist/Liebert_Dynamic_Island-0.1.4-x86_64.AppImage` (7,0 MB) + `dist/liebert-dynamic-island-linux-x86_64.tar.gz` (6,8 MB). `cargo test` 62 passed dan `cargo clippy --all-targets -- -D warnings` bersih.
+
+### Added
+
+- `src/platform/{mod,linux,windows}.rs`, `src/ui/mod.rs`: Menambahkan dukungan huruf **Bold** untuk lirik utama dan daftar lirik lengkap dengan efek blur di mode expanded (**v0.1.3**):
+  - Menambahkan keluarga font khusus `LyricsBold` (`apply_configured_fonts`, `platform::bold_fallback_fonts`) dengan penemuan otomatis varian Bold font sistem (`NotoSans-Bold.ttf`/`DejaVuSans-Bold.ttf`/`fc-match sans-serif:bold` di Linux; `segoeuib.ttf`/`arialbd.ttf` + `malgunbd.ttf` di Windows) serta fallback CJK `FontFamilyTarget::All` (`Bold` + `Proportional` + `Monospace`) agar lirik utama di pill maupun kartu Music selalu tampil tebal lintas aksara.
+  - Memperbarui kolom kanan `render_music_tab` di mode **Expanded** agar otomatis memicu fetch lirik lagu berjalan (`ensure_lyrics_requested_for_media`), menampilkan **seluruh baris lirik** (`LyricsData::Synced` dan `LyricsData::Plain`) dalam `ScrollArea`, melakukan auto-scroll halus baris aktif ke tengah viewport, serta merender baris **sebelum dan sesudah** baris aktif dengan blur isotropik multi-pass + peluruhan opasitas berbasis jarak (`render_blurred_aligned_text`) yang identik pada `SoftCanvas` (Windows/Wayland) dan OpenGL.
+
+### Fixed
+
+- `src/ui/mod.rs`, `src/battery.rs`, `src/sysmon.rs`, `src/ui/taskbar.rs`, `src/platform/mod.rs`: Memperbaiki tampilan **Idle Clock** dan perataan **`TextAlign::Center`** pada Linux/Windows (**v0.1.3**):
+  - Mengganti kalkulasi lebar jam tetap di `target_size` dengan pengukuran lebar aktual `LayoutJob` (`render_island_ui` + estimator awal `estimate_clock_pill_width` dengan digit stabil `stabilized_clock_measure_text`), sehingga lebar pill otomatis menyesuaikan format `12h`/`24h`, detik, dan zona waktu, sementara konten `[dot + jam + tz]` dipusatkan presisi via `render_dot_label(..., Align::Center)` dan monitor width `eframe` membaca `viewport().monitor_size`.
+  - Memperbaiki penerapan **`TextAlign::Center`** (serta `Left`/`Right`) di pill mode (`IdleDisplayMode::Lyrics` karaoke & fallback non-karaoke + terjemahan, `NextEvent`, `Minimal`, `render_compact` badge+judul+body) dan mode expanded (`render_expanded` notifikasi multi-baris, `render_overview_tab`, `render_todo_tab`, `render_calendar_tab`, `render_music_tab`, dan `render_wrapped_karaoke` via `LayoutJob::halign` + `galley_draw_pos` beserta 3 unit test baru `clock_width_scales_automatically_and_stabilizes_digits`, `galley_draw_pos_centers_single_and_wrapped_lines_in_column`, dan `apply_configured_fonts_registers_bold_lyrics_family_and_line_resolution`).
+  - Memperbaiki warning `clippy` Linux (`question_mark`, `UiControlEvent::ConfigUpdated(Box<Config>)`, dan `#[cfg_attr(not(windows), allow(dead_code))]` pada kode khusus Windows).
+
+### Changed
+
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `src/ui/mod.rs`, `README.md`: Menaikkan versi rilis menjadi **`0.1.3`** dan membangun ulang paket Linux (`AppImage` & `.tar.gz`). Lihat [[00 - Dashboard Proyek]], [[01 - Arsitektur & Spesifikasi]], dan [[03 - Catatan Rapat & Keputusan]] (ADR-021).
+
 ## 2026-11-26
 
 ### Fixed
