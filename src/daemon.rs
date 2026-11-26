@@ -32,6 +32,7 @@ struct DaemonState {
     media: Option<MediaTrack>,
     lyrics: LyricsData,
     lyrics_key: Option<(String, String)>,
+    lyrics_had_duration: bool,
     calendar_events: Vec<CalendarEvent>,
     calendar_status: String,
     alerted_events: HashSet<(String, i64)>,
@@ -65,6 +66,7 @@ impl DaemonState {
             media: None,
             lyrics: LyricsData::NotFound,
             lyrics_key: None,
+            lyrics_had_duration: false,
             calendar_events: Vec::new(),
             calendar_status: "Idle".to_owned(),
             alerted_events: HashSet::new(),
@@ -349,19 +351,26 @@ pub fn run_daemon(demo_mode: bool) -> ExitCode {
                 PlatformEvent::Media(track) => {
                     let ipc_track = track.as_ref().map(IpcMediaTrack::from);
                     daemon.media = track;
-                    if let Some((artist, title)) = daemon
+                    if let Some((artist, title, has_dur)) = daemon
                         .media
                         .as_ref()
-                        .map(|t| (t.artist.clone(), t.title.clone()))
+                        .map(|t| (t.artist.clone(), t.title.clone(), t.duration_ms > 0))
                     {
                         let key = (artist, title);
-                        if daemon.lyrics_key.as_ref() != Some(&key) {
+                        let key_changed = daemon.lyrics_key.as_ref() != Some(&key);
+                        let duration_arrived = !key_changed
+                            && has_dur
+                            && !daemon.lyrics_had_duration
+                            && matches!(daemon.lyrics, LyricsData::NotFound | LyricsData::Plain(_));
+                        if key_changed || duration_arrived {
                             daemon.lyrics_key = Some(key);
+                            daemon.lyrics_had_duration = has_dur;
                             daemon.lyrics = LyricsData::Loading;
                             daemon.request_lyrics_if_needed(&lyrics_req_tx);
                         }
                     } else {
                         daemon.lyrics_key = None;
+                        daemon.lyrics_had_duration = false;
                         daemon.lyrics = LyricsData::NotFound;
                     }
                     daemon.send_to_ui(&DaemonToUi::Media(ipc_track));
