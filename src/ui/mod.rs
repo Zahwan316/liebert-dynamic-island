@@ -266,6 +266,48 @@ enum IslandTab {
     System,
 }
 
+impl IslandTab {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "HOME",
+            Self::Music => "MUSIC",
+            Self::Todo => "TASKS",
+            Self::Calendar => "CALENDAR",
+            Self::Pomodoro => "TIMER",
+            Self::System => "SYSTEM",
+        }
+    }
+}
+
+/// Tabs available in the current configuration, in Left/Right arrow order.
+fn visible_tabs(config: &Config) -> Vec<IslandTab> {
+    let mut tabs = vec![IslandTab::Overview];
+    if config.show_lyrics {
+        tabs.push(IslandTab::Music);
+    }
+    if config.show_todo {
+        tabs.push(IslandTab::Todo);
+    }
+    if config.show_calendar {
+        tabs.push(IslandTab::Calendar);
+    }
+    if config.show_pomodoro {
+        tabs.push(IslandTab::Pomodoro);
+    }
+    tabs.push(IslandTab::System);
+    tabs
+}
+
+fn navigate_tab(current: IslandTab, direction: i32, config: &Config) -> IslandTab {
+    let tabs = visible_tabs(config);
+    let Some(pos) = tabs.iter().position(|t| *t == current) else {
+        return tabs[0];
+    };
+    let len = tabs.len() as i32;
+    let next = (pos as i32 + direction).rem_euclid(len) as usize;
+    tabs[next]
+}
+
 /// Fixed transparent window size big enough for the largest card, so hover/notch animations
 /// never resize the OS window (the cause of open/close flicker).
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -1578,6 +1620,27 @@ impl IslandApp {
         let ctx = ui.ctx().clone();
         let now = Instant::now();
 
+        // Left/Right arrows switch tabs in expanded mode. Skip when a text field owns focus.
+        if self.state.visual == IslandVisualState::Expanded && self.state.active.is_none() {
+            let left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+            let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
+            let typing = ui.ctx().memory(|m| m.focused().is_some());
+            if !typing && (left || right) {
+                let next = navigate_tab(
+                    self.active_tab,
+                    if left { -1 } else { 1 },
+                    &self.config,
+                );
+                if next != self.active_tab {
+                    if self.active_tab == IslandTab::Music || next == IslandTab::Music {
+                        self.music_scroll_focus_key = None;
+                    }
+                    self.active_tab = next;
+                }
+                ctx.request_repaint();
+            }
+        }
+
         if self.effective_idle_mode() == IdleDisplayMode::Clock {
             let s = self.config.scale;
             let (time_str, tz_opt) = clock_display_parts(&self.config);
@@ -2502,76 +2565,23 @@ impl IslandApp {
         }
         let row_h = 24.0 * s;
         let right_w = 82.0 * s;
-        let left_w = (ui.available_width() - right_w - 6.0 * s).max(160.0);
+        let left_w = (ui.available_width() - right_w - 6.0 * s).max(80.0);
         ui.horizontal(|ui| {
             ui.allocate_ui_with_layout(
                 Vec2::new(left_w, row_h),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
-                    ui.spacing_mut().item_spacing.x = 4.0 * s;
-                    render_pill_tab(
-                        ui,
-                        &mut self.active_tab,
-                        IslandTab::Overview,
-                        None,
-                        "Home",
-                        accent,
-                        s,
+                    ui.spacing_mut().item_spacing.x = 6.0 * s;
+                    ui.label(
+                        RichText::new(self.active_tab.label())
+                            .font(FontId::proportional(10.5 * s))
+                            .color(muted),
                     );
-                    if self.config.show_lyrics {
-                        render_pill_tab(
-                            ui,
-                            &mut self.active_tab,
-                            IslandTab::Music,
-                            Some(IconKind::MusicNote),
-                            "Music",
-                            accent,
-                            s,
-                        );
-                    }
-                    if self.config.show_todo {
-                        let label = format!("{}", self.todos.pending_count());
-                        render_pill_tab(
-                            ui,
-                            &mut self.active_tab,
-                            IslandTab::Todo,
-                            Some(IconKind::TodoCheck),
-                            &label,
-                            accent,
-                            s,
-                        );
-                    }
-                    if self.config.show_calendar {
-                        render_pill_tab(
-                            ui,
-                            &mut self.active_tab,
-                            IslandTab::Calendar,
-                            Some(IconKind::Calendar),
-                            "Calendar",
-                            accent,
-                            s,
-                        );
-                    }
-                    if self.config.show_pomodoro {
-                        render_pill_tab(
-                            ui,
-                            &mut self.active_tab,
-                            IslandTab::Pomodoro,
-                            Some(IconKind::Timer),
-                            "Timer",
-                            accent,
-                            s,
-                        );
-                    }
-                    render_pill_tab(
-                        ui,
-                        &mut self.active_tab,
-                        IslandTab::System,
-                        None,
-                        "Sys",
-                        accent,
-                        s,
+                    ui.label(
+                        RichText::new("◀ ▶")
+                            .font(FontId::proportional(9.5 * s))
+                            .color(Color32::from_rgba_unmultiplied(255, 255, 255, 80)),
                     );
                 },
             );
@@ -2663,9 +2673,9 @@ impl IslandApp {
             .size()
             .x
             + 12.0;
-        let lead = (row_w - (time_w + gap + tz_badge_w)).max(0.0) * align.to_factor();
+        let lead = (row_w - (time_w + gap + tz_badge_w)).max(0.0) * 0.5;
         ui.allocate_ui_with_layout(
-            Vec2::new(row_w, 22.0 * s),
+            Vec2::new(row_w, 20.0 * s),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -2683,7 +2693,7 @@ impl IslandApp {
                     });
             },
         );
-        ui.add_space(4.0);
+        ui.add_space(3.0 * s);
 
         if self.config.show_lyrics {
             if let Some(track) = &self.media {
@@ -2706,6 +2716,7 @@ impl IslandApp {
                 ) {
                     self.active_tab = IslandTab::Music;
                 }
+                ui.add_space(2.0 * s);
             } else {
                 render_overview_row(
                     ui,
@@ -2716,6 +2727,7 @@ impl IslandApp {
                     align,
                     false,
                 );
+                ui.add_space(2.0 * s);
             }
         }
 
@@ -3087,194 +3099,113 @@ impl IslandApp {
         let mut pending_shuffle: Option<bool> = None;
         let mut pending_repeat: Option<RepeatMode> = None;
         let mut retry_lyrics = false;
-        let total_w = ui.available_width();
-        let col_gap = 14.0 * s;
-        let left_w = (total_w * 0.43).max(148.0 * s);
-        let right_w = (total_w - left_w - col_gap).max(120.0 * s);
-        let body_h = ui.available_height().max(140.0 * s);
+        let total_w = ui.available_width().max(140.0 * s);
+        let header_h = 30.0 * s;
+        let seek_h = 12.0 * s;
+        let footer_h = 28.0 * s;
+        let gap = 4.0 * s;
+        let lyrics_h = (ui.available_height() - header_h - seek_h - footer_h - gap * 3.0)
+            .max(80.0 * s);
 
-        ui.horizontal_top(|ui| {
-            // Left column: Album Art, centered Title & Artist, Playbar, and Transport Controls.
-            ui.allocate_ui_with_layout(
-                Vec2::new(left_w, body_h),
-                egui::Layout::top_down(egui::Align::Center),
-                |ui| {
-                    ui.set_clip_rect(ui.max_rect());
-                    let art_size = (left_w - 26.0 * s).clamp(84.0 * s, 118.0 * s);
-                    let (art_rect, _) =
-                        ui.allocate_exact_size(Vec2::splat(art_size), Sense::hover());
-                    let art_radius = CornerRadius::same((12.0 * s).round() as u8);
-
-                    if let Some(tex) = &self.album_art_tex {
-                        let shape = RectShape::filled(art_rect, art_radius, Color32::WHITE)
-                            .with_texture(
-                                tex.id(),
-                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                            );
-                        ui.painter().add(shape);
-                    } else {
-                        ui.painter().rect_filled(
-                            art_rect,
-                            art_radius,
-                            Color32::from_rgba_unmultiplied(45, 42, 44, 220),
-                        );
-                        ui.painter().circle_stroke(
-                            art_rect.center(),
-                            art_size * 0.24,
-                            Stroke::new(2.0 * s, accent),
-                        );
-                        paint_icon(
-                            ui.painter(),
-                            Rect::from_center_size(art_rect.center(), Vec2::splat(22.0 * s)),
-                            IconKind::MusicNote,
-                            accent,
-                        );
-                    }
-
-                    ui.add_space(6.0 * s);
-                    render_aligned_truncated_text(
-                        ui,
-                        &track.title,
-                        FontId::proportional(13.0 * s),
-                        text_col,
-                        align,
+        // Lyrics-first expanded layout: compact now-playing strip, then full-width lyrics.
+        ui.allocate_ui_with_layout(
+            Vec2::new(total_w, header_h),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_clip_rect(ui.max_rect());
+                ui.spacing_mut().item_spacing.x = 6.0 * s;
+                let thumb = 28.0 * s;
+                let (art_rect, _) = ui.allocate_exact_size(Vec2::splat(thumb), Sense::hover());
+                let art_radius = CornerRadius::same((8.0 * s).round() as u8);
+                if let Some(tex) = &self.album_art_tex {
+                    ui.painter().add(
+                        RectShape::filled(art_rect, art_radius, Color32::WHITE).with_texture(
+                            tex.id(),
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                        ),
                     );
-                    if !track.artist.is_empty() {
+                } else {
+                    ui.painter().rect_filled(
+                        art_rect,
+                        art_radius,
+                        Color32::from_rgba_unmultiplied(45, 42, 44, 220),
+                    );
+                    paint_icon(
+                        ui.painter(),
+                        Rect::from_center_size(art_rect.center(), Vec2::splat(16.0 * s)),
+                        IconKind::MusicNote,
+                        accent,
+                    );
+                }
+                let title_w = (total_w - thumb - 46.0 * s).max(60.0 * s);
+                ui.allocate_ui_with_layout(
+                    Vec2::new(title_w, header_h),
+                    egui::Layout::top_down(align),
+                    |ui| {
+                        ui.set_clip_rect(ui.max_rect());
                         render_aligned_truncated_text(
                             ui,
-                            &track.artist,
-                            FontId::proportional(11.0 * s),
-                            muted,
+                            &track.title,
+                            FontId::proportional(12.5 * s),
+                            text_col,
                             align,
                         );
-                    }
-
-                    ui.add_space(6.0 * s);
-                    if let Some(seek_ms) =
-                        render_playbar(ui, pos_ms, track.duration_ms, accent, muted, s)
+                        if !track.artist.is_empty() {
+                            render_aligned_truncated_text(
+                                ui,
+                                &track.artist,
+                                FontId::proportional(10.5 * s),
+                                muted,
+                                align,
+                            );
+                        }
+                    },
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let play_kind = if track.is_playing {
+                        IconKind::Pause
+                    } else {
+                        IconKind::Play
+                    };
+                    if icon_button(
+                        ui,
+                        play_kind,
+                        Vec2::splat(26.0 * s),
+                        14.0 * s,
+                        Color32::WHITE,
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 24),
+                        CornerRadius::same((13.0 * s).round() as u8),
+                    )
+                    .on_hover_text("Play / Pause")
+                    .clicked()
                     {
-                        let _ = self.channels.media_cmd_tx.send(MediaCommand::SeekMs(seek_ms));
-                        pending_seek = Some(seek_ms);
+                        let _ = self
+                            .channels
+                            .media_cmd_tx
+                            .send(MediaCommand::TogglePlayPause);
                     }
+                });
+            },
+        );
 
-                    ui.add_space(4.0 * s);
-                    ui.horizontal(|ui| {
-                        let btn_sz = Vec2::splat(25.0 * s);
-                        let play_sz = Vec2::splat(29.0 * s);
-                        let gap = 3.0 * s;
-                        let controls_w = btn_sz.x * 4.0 + play_sz.x + gap * 4.0;
-                        let side = ((ui.available_width() - controls_w) * 0.5).max(0.0);
-                        ui.add_space(side);
-                        ui.spacing_mut().item_spacing.x = gap;
+        ui.add_space(gap);
+        ui.allocate_ui_with_layout(
+            Vec2::new(total_w, seek_h),
+            egui::Layout::top_down(align),
+            |ui| {
+                if let Some(seek_ms) =
+                    render_playbar(ui, pos_ms, track.duration_ms, accent, muted, s)
+                {
+                    let _ = self.channels.media_cmd_tx.send(MediaCommand::SeekMs(seek_ms));
+                    pending_seek = Some(seek_ms);
+                }
+            },
+        );
 
-                        let shuf_col = if track.shuffle { accent } else { muted };
-                        let btn_rad = CornerRadius::same((8.0 * s).round() as u8);
-                        if icon_button(
-                            ui,
-                            IconKind::Shuffle,
-                            btn_sz,
-                            13.0 * s,
-                            shuf_col,
-                            Color32::TRANSPARENT,
-                            btn_rad,
-                        )
-                        .on_hover_text("Shuffle")
-                        .clicked()
-                        {
-                            let next_shuf = !track.shuffle;
-                            let _ = self
-                                .channels
-                                .media_cmd_tx
-                                .send(MediaCommand::SetShuffle(next_shuf));
-                            pending_shuffle = Some(next_shuf);
-                        }
-
-                        if icon_button(
-                            ui,
-                            IconKind::Previous,
-                            btn_sz,
-                            14.0 * s,
-                            text_col,
-                            Color32::TRANSPARENT,
-                            btn_rad,
-                        )
-                        .on_hover_text("Previous")
-                        .clicked()
-                        {
-                            let _ = self.channels.media_cmd_tx.send(MediaCommand::Previous);
-                        }
-
-                        let play_kind = if track.is_playing {
-                            IconKind::Pause
-                        } else {
-                            IconKind::Play
-                        };
-                        if icon_button(
-                            ui,
-                            play_kind,
-                            play_sz,
-                            15.5 * s,
-                            Color32::WHITE,
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 24),
-                            CornerRadius::same((14.5 * s).round() as u8),
-                        )
-                        .on_hover_text("Play / Pause")
-                        .clicked()
-                        {
-                            let _ = self
-                                .channels
-                                .media_cmd_tx
-                                .send(MediaCommand::TogglePlayPause);
-                        }
-
-                        if icon_button(
-                            ui,
-                            IconKind::Next,
-                            btn_sz,
-                            14.0 * s,
-                            text_col,
-                            Color32::TRANSPARENT,
-                            btn_rad,
-                        )
-                        .on_hover_text("Next")
-                        .clicked()
-                        {
-                            let _ = self.channels.media_cmd_tx.send(MediaCommand::Next);
-                        }
-
-                        let (rep_kind, rep_col) = match track.repeat {
-                            RepeatMode::Off => (IconKind::Repeat, muted),
-                            RepeatMode::All => (IconKind::Repeat, accent),
-                            RepeatMode::One => (IconKind::RepeatOne, accent),
-                        };
-                        if icon_button(
-                            ui,
-                            rep_kind,
-                            btn_sz,
-                            13.0 * s,
-                            rep_col,
-                            Color32::TRANSPARENT,
-                            btn_rad,
-                        )
-                        .on_hover_text("Repeat (Off / All / One)")
-                        .clicked()
-                        {
-                            let next_rep = track.repeat.next();
-                            let _ = self
-                                .channels
-                                .media_cmd_tx
-                                .send(MediaCommand::SetRepeat(next_rep));
-                            pending_repeat = Some(next_rep);
-                        }
-                    });
-                },
-            );
-
-            ui.add_space(col_gap);
-
+        ui.add_space(gap);
             // Right column: All lyrics with bold active karaoke focus & blurred prev/next lines.
             ui.allocate_ui_with_layout(
-                Vec2::new(right_w, body_h),
+                Vec2::new(total_w, lyrics_h),
                 egui::Layout::top_down(align),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
@@ -3355,7 +3286,7 @@ impl IslandApp {
                                     } else {
                                         1.0
                                     };
-                                    let pad_v = (body_h * 0.28).max(16.0 * s);
+                                    let pad_v = (lyrics_h * 0.30).max(18.0 * s);
                                     ui.add_space(pad_v);
                                     for (idx, line) in lines.iter().enumerate() {
                                         let (primary, romaji_sub, trans_sub) = resolve_lyric_line_texts(
@@ -3371,7 +3302,7 @@ impl IslandApp {
                                                 ui,
                                                 primary,
                                                 orig_prog,
-                                                lyrics_bold_font(14.5 * s),
+                                                lyrics_bold_font(15.0 * s),
                                                 text_col,
                                                 dim_white,
                                                 wrap_w,
@@ -3422,7 +3353,7 @@ impl IslandApp {
                                             render_blurred_aligned_text(
                                                 ui,
                                                 primary,
-                                                lyrics_bold_font(13.0 * s),
+                                                lyrics_bold_font(13.5 * s),
                                                 text_col,
                                                 wrap_w,
                                                 align,
@@ -3454,7 +3385,7 @@ impl IslandApp {
                                                 );
                                             }
                                         }
-                                        ui.add_space(7.0 * s);
+                                        ui.add_space(8.0 * s);
                                     }
                                     ui.add_space(pad_v);
                                 }
@@ -3509,7 +3440,58 @@ impl IslandApp {
                         });
                 },
             );
-        });
+
+        ui.add_space(gap);
+        ui.allocate_ui_with_layout(
+            Vec2::new(total_w, footer_h),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_clip_rect(ui.max_rect());
+                ui.horizontal(|ui| {
+                    let btn_sz = Vec2::splat(23.0 * s);
+                    let gap_x = 4.0 * s;
+                    let controls_w = btn_sz.x * 4.0 + gap_x * 3.0;
+                    ui.add_space(((ui.available_width() - controls_w) * 0.5).max(0.0));
+                    ui.spacing_mut().item_spacing.x = gap_x;
+                    let btn_rad = CornerRadius::same((8.0 * s).round() as u8);
+
+                    let shuf_col = if track.shuffle { accent } else { muted };
+                    if icon_button(ui, IconKind::Shuffle, btn_sz, 12.0 * s, shuf_col, Color32::TRANSPARENT, btn_rad)
+                        .on_hover_text("Shuffle")
+                        .clicked()
+                    {
+                        let next_shuf = !track.shuffle;
+                        let _ = self.channels.media_cmd_tx.send(MediaCommand::SetShuffle(next_shuf));
+                        pending_shuffle = Some(next_shuf);
+                    }
+                    if icon_button(ui, IconKind::Previous, btn_sz, 13.0 * s, text_col, Color32::TRANSPARENT, btn_rad)
+                        .on_hover_text("Previous")
+                        .clicked()
+                    {
+                        let _ = self.channels.media_cmd_tx.send(MediaCommand::Previous);
+                    }
+                    if icon_button(ui, IconKind::Next, btn_sz, 13.0 * s, text_col, Color32::TRANSPARENT, btn_rad)
+                        .on_hover_text("Next")
+                        .clicked()
+                    {
+                        let _ = self.channels.media_cmd_tx.send(MediaCommand::Next);
+                    }
+                    let (rep_kind, rep_col) = match track.repeat {
+                        RepeatMode::Off => (IconKind::Repeat, muted),
+                        RepeatMode::All => (IconKind::Repeat, accent),
+                        RepeatMode::One => (IconKind::RepeatOne, accent),
+                    };
+                    if icon_button(ui, rep_kind, btn_sz, 12.0 * s, rep_col, Color32::TRANSPARENT, btn_rad)
+                        .on_hover_text("Repeat (Off / All / One)")
+                        .clicked()
+                    {
+                        let next_rep = track.repeat.next();
+                        let _ = self.channels.media_cmd_tx.send(MediaCommand::SetRepeat(next_rep));
+                        pending_repeat = Some(next_rep);
+                    }
+                });
+            },
+        );
         if let Some(focus) = new_scroll_focus {
             self.music_scroll_focus_key = Some(focus);
         }
@@ -4557,73 +4539,6 @@ fn render_overview_row(
             .galley(Pos2::new(text_left, text_y), galley, Color32::TRANSPARENT);
     }
     clickable && resp.clicked()
-}
-
-fn render_pill_tab(
-    ui: &mut egui::Ui,
-    active: &mut IslandTab,
-    value: IslandTab,
-    icon: Option<IconKind>,
-    label: &str,
-    accent: Color32,
-    scale: f32,
-) {
-    let selected = *active == value;
-    let text_col = if selected {
-        Color32::WHITE
-    } else {
-        Color32::from_gray(185)
-    };
-    let font = FontId::proportional(11.0 * scale);
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, text_col);
-    let pad_x = 8.0 * scale;
-    let icon_sz = if icon.is_some() { 11.5 * scale } else { 0.0 };
-    let icon_gap = if icon.is_some() { 4.5 * scale } else { 0.0 };
-    let w = (pad_x * 2.0 + icon_sz + icon_gap + galley.size().x).max(38.0 * scale);
-    let h = 23.0 * scale;
-
-    let (rect, resp) = ui.allocate_exact_size(Vec2::new(w, h), Sense::click());
-    let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
-    if ui.is_rect_visible(rect) {
-        let fill = if selected {
-            Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 52)
-        } else if resp.is_pointer_button_down_on() {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 28)
-        } else if resp.hovered() {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 20)
-        } else {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 10)
-        };
-        let stroke = if selected {
-            Stroke::new(
-                1.0,
-                Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 150),
-            )
-        } else {
-            Stroke::NONE
-        };
-        let corner = CornerRadius::same(10);
-        ui.painter().rect_filled(rect, corner, fill);
-        if stroke != Stroke::NONE {
-            ui.painter()
-                .rect_stroke(rect, corner, stroke, StrokeKind::Inside);
-        }
-
-        let mut cursor_x = rect.left() + pad_x;
-        if let Some(kind) = icon {
-            let icon_rect = Rect::from_center_size(
-                Pos2::new(cursor_x + icon_sz * 0.5, rect.center().y),
-                Vec2::splat(icon_sz),
-            );
-            paint_icon(ui.painter(), icon_rect, kind, text_col);
-            cursor_x += icon_sz + icon_gap;
-        }
-        let text_pos = Pos2::new(cursor_x, rect.center().y - galley.size().y * 0.5);
-        ui.painter().galley(text_pos, galley, Color32::TRANSPARENT);
-    }
-    if resp.clicked() {
-        *active = value;
-    }
 }
 
 fn scale_color_alpha(color: Color32, alpha: f32) -> Color32 {

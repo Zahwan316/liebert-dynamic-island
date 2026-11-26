@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use eframe::egui::{Color32, ClippedPrimitive, TextureFilter, TextureId, TextureOptions, TextureWrapMode, TexturesDelta};
 use eframe::epaint::{ImageData, Mesh, Primitive, Vertex, WHITE_UV};
@@ -97,6 +98,12 @@ pub struct SoftCanvas {
     textures: HashMap<TextureId, SoftTexture>,
 }
 
+fn take_color_pixels(img: &mut Arc<eframe::egui::ColorImage>) -> Vec<Color32> {
+    Arc::get_mut(img)
+        .map(|image| std::mem::take(&mut image.pixels))
+        .unwrap_or_else(|| img.pixels.clone())
+}
+
 impl SoftCanvas {
     pub fn new() -> Self {
         Self::default()
@@ -108,10 +115,10 @@ impl SoftCanvas {
     }
 
     /// Apply new or updated texture regions prior to rasterization.
-    pub fn update_textures_before_paint(&mut self, delta: &TexturesDelta) {
-        for (id, deltas) in &delta.set {
+    pub fn update_textures_before_paint(&mut self, delta: &mut TexturesDelta) {
+        for (id, deltas) in &mut delta.set {
             for d in deltas {
-                let ImageData::Color(img) = &d.image;
+                let ImageData::Color(img) = &mut d.image;
                 let [w, h] = img.size;
                 if let Some(pos) = d.pos {
                     if let Some(tex) = self.textures.get_mut(id) {
@@ -138,7 +145,7 @@ impl SoftCanvas {
                     tex.height = h;
                     tex.options = d.options;
                     tex.pixels.clear();
-                    tex.pixels.extend_from_slice(&img.pixels);
+                    tex.pixels = take_color_pixels(img);
                 } else {
                     self.textures.insert(
                         *id,
@@ -146,7 +153,7 @@ impl SoftCanvas {
                             width: w,
                             height: h,
                             options: d.options,
-                            pixels: img.pixels.clone(),
+                            pixels: take_color_pixels(img),
                         },
                     );
                 }
@@ -538,7 +545,7 @@ mod tests {
             tex_id,
             vec![ImageDelta::full(full, TextureOptions::NEAREST)].into(),
         );
-        canvas.update_textures_before_paint(&delta);
+        canvas.update_textures_before_paint(&mut delta);
         canvas.free_textures_after_paint(delta);
 
         // Partial update changes pixel (1, 1) to green.
@@ -552,7 +559,7 @@ mod tests {
             )]
             .into(),
         );
-        canvas.update_textures_before_paint(&patch_delta);
+        canvas.update_textures_before_paint(&mut patch_delta);
         canvas.free_textures_after_paint(patch_delta);
 
         let mut mesh = Mesh::with_texture(tex_id);

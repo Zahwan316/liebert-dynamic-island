@@ -51,12 +51,14 @@ pub fn decode_album_art(bytes: &[u8]) -> Option<Arc<AlbumArt>> {
         .with_guessed_format()
         .ok()?;
     let mut limits = image::Limits::default();
-    limits.max_image_width = Some(2048);
-    limits.max_image_height = Some(2048);
-    limits.max_alloc = Some(16 * 1024 * 1024);
+    // The largest consumer is a 118 px pill thumbnail; decoding beyond 1024 px / 8 MiB only
+    // creates a transient memory spike without improving the rendered result.
+    limits.max_image_width = Some(1024);
+    limits.max_image_height = Some(1024);
+    limits.max_alloc = Some(8 * 1024 * 1024);
     reader.limits(limits);
     let img = reader.decode().ok()?;
-    let resized = img.resize(160, 160, image::imageops::FilterType::Triangle);
+    let resized = img.resize(128, 128, image::imageops::FilterType::Triangle);
     drop(img);
     let rgba_img = resized.into_rgba8();
     let width = rgba_img.width() as usize;

@@ -1,6 +1,6 @@
 [package]
 name = "liebert-dynamic-island"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Lightweight native Rust Dynamic Island notification overlay for Windows and Linux"
@@ -40,13 +40,15 @@ windows = { version = "0.62", features = [
     "Win32_System_Power",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_Input",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "6.5"
-smithay-client-toolkit = { version = "0.19", default-features = false, features = ["calloop"] }
+smithay-client-toolkit = { version = "0.19", default-features = false, features = ["calloop", "xkbcommon"] }
 wayland-client = "0.31"
 calloop = "0.13"
 calloop-wayland-source = "0.3"
@@ -62,7 +64,7 @@ panic = "abort"
 before-packaging-command = "cargo build --release"
 product-name = "Liebert Dynamic Island"
 identifier = "com.liebert.dynamic-island"
-version = "0.1.4"
+version = "0.1.5"
 out-dir = "./target/installer"
 # "nsis" menghasilkan installer .exe, "wix" menghasilkan installer .msi (keduanya mendukung uninstall Windows)
 formats = ["nsis", "wix"]

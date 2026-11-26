@@ -597,7 +597,7 @@ impl NotificationServer {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("liebert-dynamic-island", "Liebert", "0.1.4", "1.2")
+        ("liebert-dynamic-island", "Liebert", "0.1.5", "1.2")
     }
 }
 
@@ -1454,7 +1454,7 @@ fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
                 .get(&candidate)
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.4",
+                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.5",
                 )
                 .header("Accept", "image/webp,image/png,image/jpeg,image/*,*/*;q=0.8")
                 .call()
@@ -1618,9 +1618,9 @@ mod tests {
         let agent: ureq::Agent = ureq::Agent::config_builder().build().into();
         let art = load_art_from_url(&agent, &format!("data:image/png;base64,{b64}"))
             .expect("decode data:image PNG");
-        assert_eq!(art.width, 160);
-        assert_eq!(art.height, 160);
-        assert_eq!(art.rgba.len(), 160 * 160 * 4);
+        assert_eq!(art.width, 128);
+        assert_eq!(art.height, 128);
+        assert_eq!(art.rgba.len(), 128 * 128 * 4);
 
         let cands = art_http_candidates("https://open.spotify.com/image/ab67616d00001e02");
         assert_eq!(

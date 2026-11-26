@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 APP_NAME="Liebert Dynamic Island"
 BIN_NAME="liebert-dynamic-island"
-VERSION="0.1.4"
+VERSION="0.1.5"
 ARCH="x86_64"
 APPDIR="$ROOT_DIR/target/appimage/AppDir"
 RUNTIME_PATH="$ROOT_DIR/target/appimage/runtime-$ARCH"

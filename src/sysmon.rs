@@ -299,7 +299,236 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod imp {
+    use std::fs;
+    use std::time::{Duration, Instant};
+
+    use super::{SystemMetrics, compute_cpu_delta};
+    use crate::battery::read_battery;
+
+    pub struct Sampler {
+        prev_cpu: Option<(u64, u64, u64)>,
+        prev_disk: Option<(u64, u64, Instant)>,
+        prev_net: Option<(u64, u64, Instant)>,
+        disk_capacity: Option<(Instant, f32)>,
+    }
+
+    impl Sampler {
+        pub fn new() -> Self {
+            Self {
+                prev_cpu: None,
+                prev_disk: None,
+                prev_net: None,
+                disk_capacity: None,
+            }
+        }
+
+        pub fn sample(&mut self, collect_disk: bool, collect_net: bool) -> SystemMetrics {
+            let mut out = SystemMetrics {
+                battery: read_battery(),
+                ..Default::default()
+            };
+
+            if let Some(curr) = read_cpu_ticks() {
+                if let Some(prev) = self.prev_cpu {
+                    out.cpu_pct = compute_cpu_delta(prev, curr);
+                }
+                self.prev_cpu = Some(curr);
+            }
+
+            let (total_kb, avail_kb) = read_meminfo().unwrap_or((0, 0));
+            if total_kb > 0 {
+                let used_kb = total_kb.saturating_sub(avail_kb);
+                out.ram_total_gb = total_kb as f32 / 1_048_576.0;
+                out.ram_used_gb = used_kb as f32 / 1_048_576.0;
+                out.ram_pct = (used_kb as f32 / total_kb as f32 * 100.0).clamp(0.0, 100.0);
+            }
+
+            if collect_disk {
+                let recently_cached = self
+                    .disk_capacity
+                    .is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(10));
+                if !recently_cached {
+                    self.disk_capacity = disk_capacity_pct().map(|pct| (Instant::now(), pct));
+                }
+                out.disk_used_pct = self.disk_capacity.map(|(_, pct)| pct);
+                if let Some((read_ticks, write_ticks)) = disk_io_ticks() {
+                    let now = Instant::now();
+                    if let Some((prev_r, prev_w, prev_at)) = self.prev_disk {
+                        let elapsed_ms = now.duration_since(prev_at).as_millis().max(1) as f64;
+                        let busy_ms =
+                            read_ticks.saturating_sub(prev_r) + write_ticks.saturating_sub(prev_w);
+                        out.disk_activity_pct =
+                            Some((busy_ms as f64 / elapsed_ms / 10.0).clamp(0.0, 100.0) as f32);
+                    }
+                    self.prev_disk = Some((read_ticks, write_ticks, now));
+                }
+            } else {
+                self.prev_disk = None;
+            }
+
+            if collect_net {
+                if let Some((rx, tx)) = net_bytes() {
+                    let now = Instant::now();
+                    if let Some((prev_rx, prev_tx, prev_at)) = self.prev_net {
+                        let elapsed = now.duration_since(prev_at).as_secs_f64().max(0.001);
+                        out.net_down_bps =
+                            (rx.saturating_sub(prev_rx) as f64 / elapsed) as u64;
+                        out.net_up_bps = (tx.saturating_sub(prev_tx) as f64 / elapsed) as u64;
+                    }
+                    self.prev_net = Some((rx, tx, now));
+                }
+            } else {
+                self.prev_net = None;
+            }
+
+            out
+        }
+    }
+
+    fn read_cpu_ticks() -> Option<(u64, u64, u64)> {
+        let text = fs::read_to_string("/proc/stat").ok()?;
+        parse_cpu_line(&text)
+    }
+
+    fn parse_cpu_line(text: &str) -> Option<(u64, u64, u64)> {
+        let line = text.lines().find(|line| line.starts_with("cpu "))?;
+        let vals = line
+            .split_whitespace()
+            .skip(1)
+            .map(|v| v.parse::<u64>().ok())
+            .collect::<Option<Vec<_>>>()?;
+        let user = vals.first().copied()? + vals.get(1).copied().unwrap_or(0);
+        let idle = vals.get(3).copied()? + vals.get(4).copied().unwrap_or(0);
+        // `compute_cpu_delta` expects Windows-style values where the second tuple member is
+        // total CPU time (including idle). Linux `/proc/stat` splits idle out, so fold it back
+        // into the total while keeping the idle slice separate for the busy calculation.
+        // `guest` / `guest_nice` are already included in user / nice and must not double count.
+        let total = vals
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(i, _)| *i < 8)
+            .fold(0u64, |sum, (_, v)| sum.saturating_add(v));
+        Some((idle, total - user, user))
+    }
+
+    fn read_meminfo() -> Option<(u64, u64)> {
+        let text = fs::read_to_string("/proc/meminfo").ok()?;
+        parse_meminfo(&text)
+    }
+
+    fn parse_meminfo(text: &str) -> Option<(u64, u64)> {
+        let mut total = None;
+        let mut available = None;
+        let mut free = None;
+        let mut buffers = None;
+        let mut cached = None;
+        for line in text.lines() {
+            let (key, rest) = line.split_once(':')?;
+            let value = rest
+                .split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<u64>().ok())?;
+            match key {
+                "MemTotal" => total = Some(value),
+                "MemAvailable" => available = Some(value),
+                "MemFree" => free = Some(value),
+                "Buffers" => buffers = Some(value),
+                "Cached" => cached = Some(value),
+                _ => {}
+            }
+        }
+        let total = total?;
+        let avail = available.or_else(|| {
+            Some(free? + buffers.unwrap_or(0) + cached.unwrap_or(0))
+        })?;
+        Some((total, avail.min(total)))
+    }
+
+    fn disk_capacity_pct() -> Option<f32> {
+        let out = std::process::Command::new("df")
+            .args(["-P", "-k", "/"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let cols = text.lines().nth(1)?.split_whitespace().collect::<Vec<_>>();
+        let capacity = cols.get(4)?.trim_end_matches('%').parse::<f32>().ok()?;
+        Some(capacity.clamp(0.0, 100.0))
+    }
+
+    fn disk_io_ticks() -> Option<(u64, u64)> {
+        let text = fs::read_to_string("/proc/diskstats").ok()?;
+        let mut reads = 0_u64;
+        let mut writes = 0_u64;
+        let mut found = false;
+        for line in text.lines() {
+            let cols = line.split_whitespace().collect::<Vec<_>>();
+            let Some(name) = cols.get(2) else { continue };
+            if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("dm-") {
+                continue;
+            }
+            let Some(r) = cols.get(6).and_then(|v| v.parse::<u64>().ok()) else {
+                continue;
+            };
+            let Some(w) = cols.get(10).and_then(|v| v.parse::<u64>().ok()) else {
+                continue;
+            };
+            reads = reads.saturating_add(r);
+            writes = writes.saturating_add(w);
+            found = true;
+        }
+        found.then_some((reads, writes))
+    }
+
+    fn net_bytes() -> Option<(u64, u64)> {
+        let text = fs::read_to_string("/proc/net/dev").ok()?;
+        let mut rx = 0_u64;
+        let mut tx = 0_u64;
+        let mut found = false;
+        for line in text.lines().skip(2) {
+            let Some((name, rest)) = line.split_once(':') else { continue };
+            if name.trim() == "lo" {
+                continue;
+            }
+            let cols = rest.split_whitespace().collect::<Vec<_>>();
+            let Some(r) = cols.first().and_then(|v| v.parse::<u64>().ok()) else {
+                continue;
+            };
+            let Some(t) = cols.get(8).and_then(|v| v.parse::<u64>().ok()) else {
+                continue;
+            };
+            rx = rx.saturating_add(r);
+            tx = tx.saturating_add(t);
+            found = true;
+        }
+        found.then_some((rx, tx))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn linux_cpu_line_maps_idle_total_user() {
+            let (idle, total_excluding_user, user) =
+                parse_cpu_line("cpu  10 2 30 4 5 6 7 8 9 10\n").unwrap();
+            assert_eq!(idle, 9);
+            assert_eq!(total_excluding_user, 60);
+            assert_eq!(user, 12);
+            assert_eq!(compute_cpu_delta((9, 60, 12), (21, 70, 18)), 25.0);
+        }
+
+        #[test]
+        fn linux_meminfo_uses_available_or_fallback() {
+            let text = "MemTotal: 1000 kB\nMemFree: 100 kB\nBuffers: 50 kB\nCached: 250 kB\n";
+            assert_eq!(parse_meminfo(text), Some((1000, 400)));
+        }
+    }
+}
+
+#[cfg(all(not(windows), not(target_os = "linux")))]
 #[allow(dead_code)]
 mod imp {
     use super::SystemMetrics;

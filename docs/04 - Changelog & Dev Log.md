@@ -10,6 +10,27 @@ tags:
 
 ## 2026-11-27
 
+### Added
+
+- `src/sysmon.rs`, `src/battery.rs`, `src/main.rs`, `src/platform/wayland_layer.rs`, `src/platform/windows_overlay.rs`: Mengaktifkan tab **System** di Linux dengan sampler asli tanpa crate baru — CPU dari `/proc/stat`, RAM dari `/proc/meminfo`, disk dari `/proc/diskstats` + `df -P -k /`, jaringan dari `/proc/net/dev`, dan baterai dari `/sys/class/power_supply`. Worker sysmon kini di-spawn pada jalur Wayland layer-shell, klien `--ui` X11/eframe, dan klien overlay Windows; perubahan config diteruskan lewat `SysmonCommand::SetConfig`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-023).
+- `src/ui/mod.rs`, `src/ui/settings.rs`, `src/platform/windows_overlay.rs`, `src/platform/wayland_layer.rs`: Navigasi tab memakai **Left/Right** (wrap mengikuti modul aktif) di Linux dan Windows. Header strip tab atas dihapus — tersisa label tab aktif, tombol ganti Notch/Island, dan tombol Settings. Windows mendaftarkan hotkey `VK_LEFT`/`VK_RIGHT` hanya saat overlay tampil; Wayland memakai `KeyboardInteractivity::OnDemand` + `KeyboardHandler` (`// shortcut: ...`) karena winit/eframe belum memiliki keyboard grab `wlr-layer-shell`.
+
+### Changed
+
+- `src/ui/mod.rs`: Layout Home dipangkas (baris lebih rapat, timezoneBadge benar-benar terpusat), tab Music expanded kini **lyrics-first** (strip now-playing + playbar + kontrol transport, lalu lirik full-width), dan Settings memakai panel kiri bergrup (`Display`, `Lyrics`, `Features`, `System`, `Tasks`, `Calendar`) + panel kanan scrollable alih-alih strip horizontal.
+- `src/ui/soft_render.rs`, `src/platform/mod.rs`, `src/platform/linux.rs`, `Cargo.toml`: Optimasi RAM — delta tekstur `egui` dipindahkan (`Arc::get_mut`/`mem::take`) alih-alih di-clone, batas decode album art diturunkan ke `1024 px` / `8 MiB` dengan resize `128×128`, serta fitur `xkbcommon` ditambahkan ke `smithay-client-toolkit` agar keyboard Wayland bekerja.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi dinaikkan ke **`0.1.5`**; AppImage + tar.gz Linux dibangun ulang. `cargo test` **65 passed**, `cargo clippy --all-targets -- -D warnings` bersih, dan cross-check `x86_64-pc-windows-gnu` bersih. Installer NSIS final tidak dibangun di host Linux (tanpa `makensis`); workflow CI Windows yang memproduksinya. Lihat [[00 - Dashboard Proyek]].
+
+### Fixed
+
+- `src/sysmon.rs`, `src/battery.rs`: Mengoreksi kalkulasi CPU Linux agar total jiffies mencakup idle (sebelum ini idle dikurangi dua kali) dan konversi satuan baterai sysfs (`time_to_empty_now` µs → detik; `energy_now / power_now` jam → detik), dengan unit test baru.
+- `src/ui/soft_render.rs`, `src/platform/wayland_layer.rs`, `src/platform/windows_overlay.rs`: Membuat `full_output` mutable agar delta tekstur dapat dikonsumsi tanpa duplikasi, termasuk jalur taskbar Windows.
+
+### Measured
+
+- Overlay Wayland **`--demo`**: `VmRSS 23,2 MB`, `Pss 19,8 MB`, `RssAnon 7,6 MB` (proses overlay tunggal). Target batas maksimal `30 MB` tercapai, tetapi target idle `< 10 MB` **belum** tercapai karena halaman kode/font `egui` yang tetap tersentuh.
+- Fallback X11/eframe: daemon `VmRSS 15,6 MB` + child UI `VmRSS 83,8 MB` (`Pss` gabungan ≈ `84,4 MB`). Jalur ini **belum** memenuhi batas `30 MB`; belum ada overlay X11 berbasis `SoftCanvas` yang setara dengan Wayland/Windows. RSS Windows tidak dapat diukur dari host Linux; penghematan alokasi diterapkan tetapi tidak diklaim terverifikasi.
+
 ### Fixed
 
 - `.github/workflows/release.yml`, `installer/windows/installer.nsi`: Memperbaiki kegagalan berulang job Windows pada langkah **Build Windows release binary, zip & installer**. Penyebabnya: NSIS me-resolve path relatif terhadap file skrip (`installer/windows/`), sehingga `File "dist\staging\..."` tidak menemukan binary yang sudah disalin di `dist\staging\` repository root. Workflow kini meneruskan `STAGING_DIR`/`OUT_FILE` **absolut** ke `makensis`, dan default skrip diubah menjadi `..\..\dist\staging` / `..\..\dist\...-setup.exe`. Skrip divalidasi dengan `makensis` (payload dummy) di container Docker; installer asli tetap dibangun CI Windows. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-022).

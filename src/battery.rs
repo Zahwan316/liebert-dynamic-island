@@ -34,9 +34,85 @@ pub struct BatteryInfo {
     pub remaining_secs: Option<u32>,
 }
 
-/// Reads laptop battery status via Win32 `GetSystemPowerStatus`.
-/// Returns `None` on desktops without a system battery or on non-Windows targets.
+#[cfg(target_os = "linux")]
+fn linux_remaining_secs(
+    time_to_empty_us: Option<u64>,
+    energy_or_charge_now: Option<u64>,
+    power_uw: Option<u64>,
+) -> Option<u32> {
+    if let Some(us) = time_to_empty_us {
+        return Some((us / 1_000_000).min(u32::MAX as u64) as u32);
+    }
+    let now = energy_or_charge_now?;
+    let power = power_uw?;
+    // sysfs reports energy in µWh and power in µW, so the ratio is hours.
+    let secs = (now.saturating_mul(3600) / power).min(u32::MAX as u64);
+    Some(secs as u32)
+}
+
+/// Reads laptop battery status via Win32 `GetSystemPowerStatus` on Windows and
+/// `/sys/class/power_supply` on Linux. Returns `None` on desktops without a battery.
 pub fn read_battery() -> Option<BatteryInfo> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::fs;
+
+        let supplies = fs::read_dir("/sys/class/power_supply").ok()?;
+        for entry in supplies.flatten() {
+            let dir = entry.path();
+            let kind = fs::read_to_string(dir.join("type"))
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            if kind != "Battery" {
+                continue;
+            }
+            let read = |name: &str| -> Option<u64> {
+                fs::read_to_string(dir.join(name))
+                    .ok()?
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            };
+            let percent = read("capacity")
+                .or_else(|| {
+                    let now = read("energy_now")?;
+                    let full = read("energy_full")?;
+                    (full > 0).then_some((now * 100 / full).min(100))
+                })
+                .or_else(|| {
+                    let now = read("charge_now")?;
+                    let full = read("charge_full")?;
+                    (full > 0).then_some((now * 100 / full).min(100))
+                })?
+                .min(100) as u8;
+            let state = fs::read_to_string(dir.join("status"))
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            let status = match state.as_str() {
+                "Charging" => BatteryStatus::Charging,
+                "Full" => BatteryStatus::Full,
+                "Not charging" | "Idle" => BatteryStatus::PluggedNotCharging,
+                _ => BatteryStatus::Discharging,
+            };
+            let remaining_secs = linux_remaining_secs(
+                read("time_to_empty_now"),
+                if status == BatteryStatus::Discharging {
+                    read("energy_now").or_else(|| read("charge_now"))
+                } else {
+                    None
+                },
+                read("power_now"),
+            );
+            return Some(BatteryInfo {
+                percent,
+                status,
+                remaining_secs,
+            });
+        }
+        None
+    }
     #[cfg(windows)]
     {
         use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
@@ -70,7 +146,7 @@ pub fn read_battery() -> Option<BatteryInfo> {
             remaining_secs,
         })
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         None
     }
@@ -138,6 +214,14 @@ mod tests {
     fn format_remaining_formats_hours_and_minutes() {
         assert_eq!(format_remaining(45 * 60), "45m");
         assert_eq!(format_remaining(135 * 60), "2h 15m");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_remaining_converts_sysfs_units_to_seconds() {
+        assert_eq!(linux_remaining_secs(Some(1_500_000), None, None), Some(1));
+        assert_eq!(linux_remaining_secs(None, Some(50_000), Some(10_000)), Some(18_000));
+        assert_eq!(linux_remaining_secs(None, None, Some(10_000)), None);
     }
 
     #[test]

@@ -179,6 +179,9 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
     let (media_cmd_tx, media_cmd_rx) = mpsc::channel::<MediaCommand>();
     let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel::<CalendarCommand>();
     let (daemon_tx, daemon_rx) = mpsc::channel::<UiToDaemon>();
+    let (sysmon_cmd_tx, sysmon_cmd_rx) = mpsc::channel::<crate::sysmon::SysmonCommand>();
+    let sysmon_event_tx = event_tx.clone();
+    let sysmon_config = config.clone();
 
     let reader_handle_and_writer = move |wake: Arc<dyn Fn() + Send + Sync>| {
         let wake_reader = wake;
@@ -293,6 +296,15 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
         let wake_ref = wake_hwnd.clone();
         let wake: Arc<dyn Fn() + Send + Sync> =
             Arc::new(move || platform::windows_overlay::post_wake_to_hwnd(&wake_ref));
+        crate::sysmon::spawn_sysmon_worker(
+            sysmon_cmd_rx,
+            sysmon_config.taskbar_monitor_enabled,
+            sysmon_config.taskbar_interval_ms,
+            sysmon_config.taskbar_show_disk,
+            sysmon_config.taskbar_show_network,
+            sysmon_event_tx,
+            wake.clone(),
+        );
         reader_handle_and_writer(wake);
         let channels = AppChannels {
             event_rx,
@@ -301,7 +313,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
             calendar_cmd_tx,
             ui_ctrl_rx: Some(ui_ctrl_rx),
             daemon_tx: Some(daemon_tx),
-            sysmon_cmd_tx: None,
+            sysmon_cmd_tx: Some(sysmon_cmd_tx),
         };
         match platform::windows_overlay::run_layered_ipc_client(
             config,
@@ -363,6 +375,15 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                 let egui_ctx = cc.egui_ctx.clone();
                 let wake: Arc<dyn Fn() + Send + Sync> =
                     Arc::new(move || egui_ctx.request_repaint());
+                crate::sysmon::spawn_sysmon_worker(
+                    sysmon_cmd_rx,
+                    sysmon_config.taskbar_monitor_enabled,
+                    sysmon_config.taskbar_interval_ms,
+                    sysmon_config.taskbar_show_disk,
+                    sysmon_config.taskbar_show_network,
+                    sysmon_event_tx,
+                    wake.clone(),
+                );
                 reader_handle_and_writer(wake);
 
                 let mut app = IslandApp::new(
@@ -374,7 +395,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                         calendar_cmd_tx,
                         ui_ctrl_rx: Some(ui_ctrl_rx),
                         daemon_tx: Some(daemon_tx),
-                        sysmon_cmd_tx: None,
+                        sysmon_cmd_tx: Some(sysmon_cmd_tx),
                     },
                     None,
                     demo_mode,
