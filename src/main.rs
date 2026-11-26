@@ -52,24 +52,22 @@ fn main() -> ExitCode {
 
     #[cfg(any(windows, target_os = "linux"))]
     if args.iter().any(|a| a == "--settings") && !args.iter().any(|a| a == "--ui") {
-        let ipc_target = if let Some(addr) = args
+        let ipc_target = args
             .windows(2)
             .find(|w| w[0] == "--ipc-addr")
-            .map(|w| w[1].clone())
-        {
-            Some(SettingsIpcTarget::Tcp(addr))
-        } else {
-            #[cfg(unix)]
-            {
-                args.windows(2)
-                    .find(|w| w[0] == "--ipc-sock")
-                    .map(|w| SettingsIpcTarget::Unix(std::path::PathBuf::from(&w[1])))
-            }
-            #[cfg(not(unix))]
-            {
-                None
-            }
-        };
+            .map(|w| SettingsIpcTarget::Tcp(w[1].clone()))
+            .or({
+                #[cfg(unix)]
+                {
+                    args.windows(2)
+                        .find(|w| w[0] == "--ipc-sock")
+                        .map(|w| SettingsIpcTarget::Unix(std::path::PathBuf::from(&w[1])))
+                }
+                #[cfg(not(unix))]
+                {
+                    None
+                }
+            });
         return match ui::run_standalone_settings(ipc_target) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -305,7 +303,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
             daemon_tx: Some(daemon_tx),
             sysmon_cmd_tx: None,
         };
-        return match platform::windows_overlay::run_layered_ipc_client(
+        match platform::windows_overlay::run_layered_ipc_client(
             config,
             snapshot,
             channels,
@@ -317,7 +315,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                 eprintln!("Fatal Windows layered UI error: {err}");
                 ExitCode::FAILURE
             }
-        };
+        }
     }
 
     #[cfg(not(windows))]

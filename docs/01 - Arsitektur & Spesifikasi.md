@@ -25,13 +25,13 @@ liebert-dynamic-island/
 ├── LICENSE.md                   # Lisensi GPL-3.0-or-later
 ├── AGENTS.md                    # Panduan kolaborasi & aturan repo
 ├── .github/workflows/
-│   └── release.yml              # GitHub Actions: AppImage + tar.gz, zip + NSIS installer, bundel AUR
+│   └── release.yml              # GitHub Actions: AppImage + tar.gz, zip + NSIS installer, bundel AUR (NSIS memakai STAGING_DIR/OUT_FILE absolut)
 ├── assets/                      # .desktop & ikon 256x256 bersama (AppImage, tar.gz, AUR)
 ├── docs/                        # Dokumentasi Obsidian & PRD
 ├── installer/windows/
 │   └── installer.nsi            # Installer NSIS Windows (per-user, Start Menu & uninstaller)
 ├── packaging/aur/
-│   ├── PKGBUILD                 # Paket AUR: build dari tag v0.1.0 via cargo --locked
+│   ├── PKGBUILD                 # Paket AUR: build dari tag v0.1.4 via cargo --locked
 │   └── .SRCINFO                 # Metadata AUR yang dihasilkan makepkg --printsrcinfo
 ├── scripts/
 │   ├── build-appimage.sh        # Packaging AppImage Linux (x86_64)

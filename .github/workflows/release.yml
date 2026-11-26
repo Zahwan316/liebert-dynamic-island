@@ -88,7 +88,11 @@ jobs:
           if (-not $nsis) { $nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe" }
           if (-not (Test-Path $nsis)) { $nsis = "$env:ProgramFiles\NSIS\makensis.exe" }
           if (-not (Test-Path $nsis)) { throw "makensis.exe not found" }
-          & $nsis "/DAPP_VERSION=$version" installer\windows\installer.nsi
+          $root = (Get-Location).Path
+          & $nsis "/DAPP_VERSION=$version" `
+            "/DSTAGING_DIR=$root\dist\staging" `
+            "/DOUT_FILE=$root\dist\liebert-dynamic-island-windows-x86_64-setup.exe" `
+            installer\windows\installer.nsi
           if ($LASTEXITCODE -ne 0) { throw "NSIS build failed with exit code $LASTEXITCODE" }
 
       - uses: actions/upload-artifact@v4

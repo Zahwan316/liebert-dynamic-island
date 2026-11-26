@@ -264,6 +264,7 @@ pub fn run_notification_spike() -> Result<String, String> {
     Err("Notification spike is only supported on Windows and Linux".to_owned())
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub fn overlay_resizable() -> bool {
     #[cfg(target_os = "linux")]
     return true;
@@ -295,6 +296,7 @@ pub fn primary_monitor_logical_width(pixels_per_point: f32) -> f32 {
     }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 pub fn prepare_overlay_rules(window_title: &str, top_offset_px: f32) {
     #[cfg(target_os = "linux")]
     linux::prepare_overlay_rules(window_title, top_offset_px);
@@ -322,7 +324,8 @@ pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     }
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
+// Legacy eframe-era helper; the native Windows layered overlay manages visibility itself.
+#[allow(dead_code)]
 pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
     #[cfg(windows)]
     {

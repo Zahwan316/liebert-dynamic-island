@@ -214,15 +214,17 @@ impl LayeredDib {
             }
             self.bits = std::ptr::null_mut();
 
-            let mut bmi = BITMAPINFO::default();
-            bmi.bmiHeader = BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w as i32,
-                // Negative height selects top-down DIB rows matching SoftCanvas scanlines.
-                biHeight: -(h as i32),
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
+            let bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: w as i32,
+                    // Negative height selects top-down DIB rows matching SoftCanvas scanlines.
+                    biHeight: -(h as i32),
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let mut raw_bits: *mut c_void = std::ptr::null_mut();

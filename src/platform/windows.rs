@@ -724,6 +724,8 @@ pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
     }
 }
 
+// Kept for the eframe fallback path; the layered overlay no longer calls this.
+#[allow(dead_code)]
 pub fn set_overlay_visible(window_title: &str, visible: bool) {
     let title = HSTRING::from(window_title);
     let Ok(hwnd) = (unsafe { FindWindowW(None, &title) }) else {

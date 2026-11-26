@@ -10,6 +10,12 @@ tags:
 
 ## 2026-11-27
 
+### Fixed
+
+- `.github/workflows/release.yml`, `installer/windows/installer.nsi`: Memperbaiki kegagalan berulang job Windows pada langkah **Build Windows release binary, zip & installer**. Penyebabnya: NSIS me-resolve path relatif terhadap file skrip (`installer/windows/`), sehingga `File "dist\staging\..."` tidak menemukan binary yang sudah disalin di `dist\staging\` repository root. Workflow kini meneruskan `STAGING_DIR`/`OUT_FILE` **absolut** ke `makensis`, dan default skrip diubah menjadi `..\..\dist\staging` / `..\..\dist\...-setup.exe`. Skrip divalidasi dengan `makensis` (payload dummy) di container Docker; installer asli tetap dibangun CI Windows. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-022).
+- `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/windows_overlay.rs`, `src/main.rs`: Membersihkan error `clippy` khusus target Windows yang muncul setelah refactor overlay berlapis: helper eframe lama (`overlay_resizable`, `prepare_overlay_rules`, `set_overlay_visible`) ditandai `dead_code` untuk Windows, inisialisasi `BITMAPINFOHEADER` memakai struct literal alih-alih assignment `Default::default()`, parser `--ipc-addr`/`--ipc-sock` memakai `Option::or`, dan `return` berlebih di cabang layered client dihapus. `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` kini bersih.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Menaikkan versi menjadi **`0.1.4`** sesuai alur rilis standar dan membangun ulang `dist/Liebert_Dynamic_Island-0.1.4-x86_64.AppImage` (7,0 MB) + `dist/liebert-dynamic-island-linux-x86_64.tar.gz` (6,8 MB). `cargo test` 62 passed dan `cargo clippy --all-targets -- -D warnings` bersih.
+
 ### Added
 
 - `src/platform/{mod,linux,windows}.rs`, `src/ui/mod.rs`: Menambahkan dukungan huruf **Bold** untuk lirik utama dan daftar lirik lengkap dengan efek blur di mode expanded (**v0.1.3**):
