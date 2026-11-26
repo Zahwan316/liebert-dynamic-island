@@ -10,6 +10,17 @@ tags:
 
 ## 2026-11-26
 
+### Fixed
+
+- `src/platform/linux.rs`, `src/lyrics.rs`, `src/daemon.rs`, `src/ui/mod.rs`: Memperbaiki bug lirik gagal di-fetch dan gagal tersinkronisasi dengan pemutar musik di Linux (**v0.1.1**):
+  - **Pemilihan Player & Parsing Metadata MPRIS2 (`src/platform/linux.rs`):** Memilih bus `org.mpris.MediaPlayer2.*` yang benar-benar sedang `Playing` (atau `Paused` ber-judul, dengan preferensi non-browser / `playerctld` dibanding tab browser menganggur), membaca `mpris:length` dan `Position` untuk varian `i64`/`u64`/`i32`/`u32`/`f64`, mendukung `xesam:artist` bertipe `String` maupun `Array` (plus fallback `xesam:albumArtist`/`xesam:creator` & stem `xesam:url`), serta men-decode percent-encoding `%XX` pada `mpris:artUrl` (`file://`).
+  - **Sinkronisasi Timeline & Seeking (`src/platform/linux.rs`, `src/ui/mod.rs`):** Memanggil `org.freedesktop.DBus.Properties.Get(..., "Position")` secara eksplisit setiap `350 ms` saat playback, mencatat `updated_at` sebelum fetch `album_art` HTTP (dan mengambil ulang `Position` bila download cover memakan waktu `> 40 ms`), memakai tracker drift `evaluate_mpris_sync` dengan konfirmasi 2-poll untuk mencegah lompatan mundur pada player step 1 detik sekaligus mengoreksi seek maju/mundur/pause secara langsung, serta memakai `SetPosition(mpris:trackid, target_us)` (fallback `Seek` memakai posisi live terbaru). Posisi interpolasi di `current_playback_ms` turut di-clamp ke `duration_ms`.
+  - **Fetch & Ranking LRCLIB (`src/lyrics.rs`, `src/daemon.rs`, `src/ui/mod.rs`):** Menambahkan normalisasi `strip_bracket_noise`/`clean_artist_name`/`primary_artist`/`split_artist_and_title` (kasus YouTube `- Topic`, tag `(Official Video)`/`(feat. ...)`/`| ...`, & multi-artis), mengutamakan hasil `synced_lyrics` bahkan ketika durasi awal `0`, menaikkan timeout HTTP ke `10 s`, memicu ulang request otomatis saat `duration_ms` baru terisi dari `0`, serta menambah tombol **Retry Fetch** pada tab Music saat status `NotFound`.
+
+### Changed
+
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `src/ui/mod.rs`, `README.md`: Menaikkan versi paket & metadata rilis dari `0.1.0` ke **`0.1.1`** dan memperbarui bundel Linux `Liebert_Dynamic_Island-0.1.1-x86_64.AppImage`. Lihat [[00 - Dashboard Proyek]], [[01 - Arsitektur & Spesifikasi]], dan [[03 - Catatan Rapat & Keputusan]].
+
 ### Added
 
 - `src/ui/soft_render.rs`, `src/ui/mod.rs`: Menambahkan rasterizer CPU pure-Rust (`SoftCanvas`, dengan 4 unit test untuk blending premultiplied alpha BGRA/RGBA, aturan diagonal top-left anti-seam, clip-rect HiDPI, dan delta tekstur parsial/free) untuk menghilangkan kebutuhan inisialisasi OpenGL/EGL/WGL dari proses overlay utama. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-018).

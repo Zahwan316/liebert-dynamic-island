@@ -181,6 +181,7 @@ pub struct IslandApp {
     media: Option<MediaTrack>,
     lyrics: LyricsData,
     last_lyrics_key: Option<(String, String)>,
+    last_lyrics_had_duration: bool,
     album_art_tex: Option<TextureHandle>,
     album_art_key: Option<(String, String)>,
     gradient_tex: Option<TextureHandle>,
@@ -262,6 +263,7 @@ impl IslandApp {
             media: None,
             lyrics: LyricsData::NotFound,
             last_lyrics_key: None,
+            last_lyrics_had_duration: false,
             album_art_tex: None,
             album_art_key: None,
             gradient_tex: None,
@@ -352,7 +354,7 @@ impl IslandApp {
             ("WhatsApp", "Budi", "Meeting jam 14:00 jadi pindah ke Discord?"),
             ("Discord", "#general — Alex", "Deploy staging barusan sukses, cek log!"),
             ("Gmail", "GitHub", "[liebert-dynamic-island] PR #12 merged"),
-            ("Google Chrome", "Download Complete", "release-v0.1.0-x86_64.zip siap dibuka"),
+            ("Google Chrome", "Download Complete", "release-v0.1.1-x86_64.zip siap dibuka"),
         ];
         let idx = (self.test_notif_seq as usize) % samples.len();
         self.test_notif_seq = self.test_notif_seq.wrapping_add(1);
@@ -495,10 +497,15 @@ impl IslandApp {
         let Some(track) = &self.media else {
             return 0;
         };
-        if track.is_playing {
+        let raw = if track.is_playing {
             track.position_ms + now.saturating_duration_since(track.updated_at).as_millis() as u64
         } else {
             track.position_ms
+        };
+        if track.duration_ms > 0 {
+            raw.min(track.duration_ms)
+        } else {
+            raw
         }
     }
 
@@ -620,20 +627,27 @@ impl IslandApp {
                 }
                 PlatformEvent::Media(track) => {
                     self.media = track;
-                    if let Some((artist, title)) = self
+                    if let Some((artist, title, has_dur)) = self
                         .media
                         .as_ref()
-                        .map(|t| (t.artist.clone(), t.title.clone()))
+                        .map(|t| (t.artist.clone(), t.title.clone(), t.duration_ms > 0))
                     {
                         let key = (artist.clone(), title.clone());
-                        if self.last_lyrics_key.as_ref() != Some(&key) {
+                        let key_changed = self.last_lyrics_key.as_ref() != Some(&key);
+                        let duration_arrived = !key_changed
+                            && has_dur
+                            && !self.last_lyrics_had_duration
+                            && matches!(self.lyrics, LyricsData::NotFound | LyricsData::Plain(_));
+                        if key_changed || duration_arrived {
                             self.ensure_cjk_font_loaded_for_text(ctx, &title);
                             self.ensure_cjk_font_loaded_for_text(ctx, &artist);
                             self.last_lyrics_key = Some(key);
+                            self.last_lyrics_had_duration = has_dur;
                             self.request_lyrics_for_current();
                         }
                     } else {
                         self.last_lyrics_key = None;
+                        self.last_lyrics_had_duration = false;
                         self.lyrics = LyricsData::NotFound;
                     }
                 }
@@ -2593,6 +2607,7 @@ impl IslandApp {
         let mut pending_seek: Option<u64> = None;
         let mut pending_shuffle: Option<bool> = None;
         let mut pending_repeat: Option<RepeatMode> = None;
+        let mut retry_lyrics = false;
         let total_w = ui.available_width();
         let col_gap = 14.0 * s;
         let left_w = (total_w * 0.43).max(148.0 * s);
@@ -2801,6 +2816,22 @@ impl IslandApp {
                                         .font(FontId::proportional(12.0 * s))
                                         .color(muted),
                                 );
+                                ui.add_space(6.0 * s);
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            RichText::new("Retry Fetch")
+                                                .font(FontId::proportional(10.5 * s))
+                                                .color(text_col),
+                                        )
+                                        .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 18))
+                                        .corner_radius(CornerRadius::same(7)),
+                                    )
+                                    .on_hover_cursor(CursorIcon::PointingHand)
+                                    .clicked()
+                                {
+                                    retry_lyrics = true;
+                                }
                             }
                             LyricsData::Synced(_) | LyricsData::Plain(_) => {
                                 if let Some(k) = active_karaoke(&self.lyrics, lyric_ms) {
@@ -2973,6 +3004,9 @@ impl IslandApp {
             if let Some(next_rep) = pending_repeat {
                 m.repeat = next_rep;
             }
+        }
+        if retry_lyrics {
+            self.request_lyrics_for_current();
         }
     }
 

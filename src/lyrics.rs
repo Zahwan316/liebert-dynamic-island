@@ -109,6 +109,8 @@ pub struct ActiveKaraoke<'a> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LrcLibResponse {
+    artist_name: Option<String>,
+    track_name: Option<String>,
     duration: Option<f64>,
     synced_lyrics: Option<String>,
     plain_lyrics: Option<String>,
@@ -382,7 +384,7 @@ pub fn spawn_lyrics_worker(
         .name("lyrics-worker".to_owned())
         .spawn(move || {
             let config = Agent::config_builder()
-                .timeout_global(Some(Duration::from_secs(5)))
+                .timeout_global(Some(Duration::from_secs(10)))
                 .build();
             let agent: Agent = config.into();
             type EnrichedCacheKey = (String, String, Option<String>, bool);
@@ -582,13 +584,22 @@ fn fetch_lyrics(
     title: &str,
     duration_secs: Option<u64>,
 ) -> LyricsData {
-    let clean_title = strip_title_noise(title);
-    if let Some(data) = query_lrclib_get(agent, artist, &clean_title, duration_secs) {
-        return data;
+    let candidates = build_search_candidates(artist, title);
+    for (cand_artist, cand_title) in &candidates {
+        if let Some(data) = query_lrclib_get(agent, cand_artist, cand_title, duration_secs) {
+            return data;
+        }
     }
-    query_lrclib_search(agent, artist, &clean_title, duration_secs)
-        .unwrap_or(LyricsData::NotFound)
+    for (cand_artist, cand_title) in &candidates {
+        if let Some(data) = query_lrclib_search(agent, cand_artist, cand_title, duration_secs) {
+            return data;
+        }
+    }
+    LyricsData::NotFound
 }
+
+const LRCLIB_USER_AGENT: &str =
+    "LiebertDynamicIsland/0.1.1 (https://github.com/Zahwan316/liebert-dynamic-island)";
 
 fn query_lrclib_get(
     agent: &Agent,
@@ -615,7 +626,7 @@ fn call_lrclib_get(
 ) -> Option<LyricsData> {
     let mut req = agent
         .get("https://lrclib.net/api/get")
-        .header("User-Agent", "LiebertDynamicIsland/0.1")
+        .header("User-Agent", LRCLIB_USER_AGENT)
         .query("artist_name", artist)
         .query("track_name", title);
     if let Some(dur) = duration_secs {
@@ -633,6 +644,79 @@ fn call_lrclib_get(
     response_to_lyrics(parsed)
 }
 
+fn rank_search_results(
+    list: &mut [LrcLibResponse],
+    artist_hint: &str,
+    title_hint: &str,
+    duration_secs: Option<u64>,
+) {
+    let target = duration_secs.filter(|&d| d > 0).map(|d| d as f64);
+    let artist_l = artist_hint.trim().to_ascii_lowercase();
+    let title_l = title_hint.trim().to_ascii_lowercase();
+    list.sort_by(|a, b| {
+        let a_synced = a.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
+        let b_synced = b.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
+
+        let a_dur_ok = target.is_none_or(|t| a.duration.is_none_or(|d| (d - t).abs() <= 20.0));
+        let b_dur_ok = target.is_none_or(|t| b.duration.is_none_or(|d| (d - t).abs() <= 20.0));
+
+        let a_artist_ok = artist_l.is_empty()
+            || a.artist_name
+                .as_ref()
+                .is_some_and(|s| artist_matches_loosely(s, &artist_l));
+        let b_artist_ok = artist_l.is_empty()
+            || b.artist_name
+                .as_ref()
+                .is_some_and(|s| artist_matches_loosely(s, &artist_l));
+
+        let a_title_ok = !title_l.is_empty()
+            && a.track_name
+                .as_ref()
+                .is_some_and(|s| s.to_ascii_lowercase().contains(&title_l));
+        let b_title_ok = !title_l.is_empty()
+            && b.track_name
+                .as_ref()
+                .is_some_and(|s| s.to_ascii_lowercase().contains(&title_l));
+
+        let a_diff = target
+            .and_then(|t| a.duration.map(|d| (d - t).abs()))
+            .unwrap_or(0.0);
+        let b_diff = target
+            .and_then(|t| b.duration.map(|d| (d - t).abs()))
+            .unwrap_or(0.0);
+
+        b_dur_ok
+            .cmp(&a_dur_ok)
+            .then_with(|| b_artist_ok.cmp(&a_artist_ok))
+            .then_with(|| b_synced.cmp(&a_synced))
+            .then_with(|| b_title_ok.cmp(&a_title_ok))
+            .then_with(|| a_diff.total_cmp(&b_diff))
+    });
+}
+
+fn artist_matches_loosely(returned: &str, expected_lower: &str) -> bool {
+    let r = returned.trim().to_ascii_lowercase();
+    if r.is_empty() || expected_lower.is_empty() {
+        return false;
+    }
+    r == expected_lower || r.contains(expected_lower) || expected_lower.contains(&r)
+}
+
+fn fetch_lrclib_search_json(agent: &Agent, q: &str) -> Option<Vec<LrcLibResponse>> {
+    let body = agent
+        .get("https://lrclib.net/api/search")
+        .header("User-Agent", LRCLIB_USER_AGENT)
+        .query("q", q)
+        .call()
+        .ok()?
+        .body_mut()
+        .with_config()
+        .limit(512 * 1024)
+        .read_to_string()
+        .ok()?;
+    serde_json::from_str::<Vec<LrcLibResponse>>(&body).ok()
+}
+
 fn query_lrclib_search(
     agent: &Agent,
     artist: &str,
@@ -643,29 +727,32 @@ fn query_lrclib_search(
     if q.is_empty() {
         return None;
     }
-    let body = agent
-        .get("https://lrclib.net/api/search")
-        .header("User-Agent", "LiebertDynamicIsland/0.1")
-        .query("q", &q)
-        .call()
-        .ok()?
-        .body_mut()
-        .with_config()
-        .limit(512 * 1024)
-        .read_to_string()
-        .ok()?;
-    let mut list: Vec<LrcLibResponse> = serde_json::from_str(&body).ok()?;
-    if let Some(target) = duration_secs.filter(|&d| d > 0) {
-        let target_f = target as f64;
-        list.sort_by(|a, b| {
-            let a_synced = a.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
-            let b_synced = b.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
-            let a_diff = a.duration.map(|d| (d - target_f).abs()).unwrap_or(f64::MAX);
-            let b_diff = b.duration.map(|d| (d - target_f).abs()).unwrap_or(f64::MAX);
-            b_synced.cmp(&a_synced).then_with(|| a_diff.total_cmp(&b_diff))
-        });
+    if let Some(mut list) = fetch_lrclib_search_json(agent, &q)
+        && !list.is_empty()
+    {
+        rank_search_results(&mut list, artist, title, duration_secs);
+        if let Some(found) = list.into_iter().find_map(response_to_lyrics) {
+            return Some(found);
+        }
     }
-    list.into_iter().find_map(response_to_lyrics)
+
+    // Fallback: search by clean track title alone when artist formatting differs (e.g. aliases/feat tags),
+    // verifying that a matching artist exists if artist metadata was present.
+    let clean_t = title.trim();
+    if !artist.trim().is_empty()
+        && clean_t.chars().count() >= 4
+        && let Some(mut list) = fetch_lrclib_search_json(agent, clean_t)
+    {
+        let exp = artist.trim().to_ascii_lowercase();
+        list.retain(|item| {
+            item.artist_name
+                .as_ref()
+                .is_some_and(|a| artist_matches_loosely(a, &exp))
+        });
+        rank_search_results(&mut list, artist, clean_t, duration_secs);
+        return list.into_iter().find_map(response_to_lyrics);
+    }
+    None
 }
 
 fn response_to_lyrics(resp: LrcLibResponse) -> Option<LyricsData> {
@@ -693,14 +780,170 @@ fn response_to_lyrics(resp: LrcLibResponse) -> Option<LyricsData> {
     None
 }
 
+fn strip_bracket_noise(s: &str, open: char, close: char) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find(open) {
+        let before = &rest[..start];
+        let after = &rest[start + open.len_utf8()..];
+        let Some(end) = after.find(close) else {
+            out.push_str(rest);
+            rest = "";
+            break;
+        };
+        let inside = &after[..end];
+        let lower = inside.to_ascii_lowercase();
+        let is_noise = [
+            "official",
+            "music video",
+            "lyric",
+            "audio",
+            "visualizer",
+            "remaster",
+            "feat.",
+            "ft.",
+            "with ",
+            "live",
+            "acoustic",
+            "radio edit",
+            "single version",
+            "explicit",
+            "clean",
+            "color coded",
+            "hd",
+            "hq",
+            "4k",
+            "prod.",
+        ]
+        .iter()
+        .any(|kw| lower.contains(kw))
+            || inside.trim().eq_ignore_ascii_case("mv")
+            || lower.contains(" mv")
+            || lower.contains("mv ")
+            || lower.contains("full ver");
+        out.push_str(before);
+        if !is_noise {
+            out.push(open);
+            out.push_str(inside);
+            out.push(close);
+        }
+        rest = &after[end + close.len_utf8()..];
+    }
+    out.push_str(rest);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn strip_title_noise(title: &str) -> String {
     let mut s = title.trim().to_owned();
-    for marker in [" (Official", " [Official", " - Remastered", " (Remastered"] {
-        if let Some(idx) = s.find(marker) {
+    if let Some((head, _)) = s.split_once(" | ") {
+        s = head.trim().to_owned();
+    }
+    s = strip_bracket_noise(&s, '(', ')');
+    s = strip_bracket_noise(&s, '[', ']');
+    s = strip_bracket_noise(&s, '【', '】');
+    s = strip_bracket_noise(&s, '（', '）');
+
+    let lower = s.to_ascii_lowercase();
+    for marker in [
+        " - remastered",
+        " - remaster",
+        " - single version",
+        " - radio edit",
+        " - official",
+        " feat. ",
+        " ft. ",
+    ] {
+        if let Some(idx) = lower.find(marker) {
             s.truncate(idx);
+            break;
         }
     }
     s.trim().to_owned()
+}
+
+fn clean_artist_name(artist: &str) -> String {
+    let mut s = artist.trim().to_owned();
+    for suffix in [" - topic", " vevo", " official"] {
+        if s.to_ascii_lowercase().ends_with(suffix) {
+            let new_len = s.len().saturating_sub(suffix.len());
+            s.truncate(new_len);
+        }
+    }
+    if matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "unknown artist" | "unknown" | "various artists"
+    ) {
+        return String::new();
+    }
+    s.trim().to_owned()
+}
+
+fn primary_artist(artist: &str) -> String {
+    let lower = artist.to_ascii_lowercase();
+    let mut split_at = artist.len();
+    for sep in [", ", " & ", " / ", " x ", " × ", " feat. ", " ft. ", " with "] {
+        if let Some(idx) = lower.find(sep) {
+            split_at = split_at.min(idx);
+        }
+    }
+    artist[..split_at].trim().to_owned()
+}
+
+fn split_artist_and_title(title: &str) -> Option<(String, String)> {
+    for sep in [" - ", " – ", " — "] {
+        if let Some((left, right)) = title.split_once(sep) {
+            let a = clean_artist_name(left);
+            let t = strip_title_noise(right);
+            if !a.is_empty() && !t.is_empty() {
+                return Some((a, t));
+            }
+        }
+    }
+    None
+}
+
+fn build_search_candidates(artist: &str, title: &str) -> Vec<(String, String)> {
+    let clean_a = clean_artist_name(artist);
+    let prim_a = primary_artist(&clean_a);
+    let clean_t = strip_title_noise(title);
+    let raw_t = title.trim().to_owned();
+
+    let mut out = Vec::new();
+    let mut push_unique = |a: String, t: String| {
+        let a = a.trim().to_owned();
+        let t = t.trim().to_owned();
+        if t.is_empty() {
+            return;
+        }
+        if !out.iter().any(|(ea, et)| ea == &a && et == &t) {
+            out.push((a, t));
+        }
+    };
+
+    if clean_a.is_empty()
+        && let Some((split_a, split_t)) = split_artist_and_title(title)
+    {
+        push_unique(split_a.clone(), split_t.clone());
+        let split_prim = primary_artist(&split_a);
+        if split_prim != split_a {
+            push_unique(split_prim, split_t);
+        }
+    }
+
+    push_unique(clean_a.clone(), clean_t.clone());
+    if !prim_a.is_empty() && prim_a != clean_a {
+        push_unique(prim_a.clone(), clean_t.clone());
+    }
+    if raw_t != clean_t {
+        push_unique(clean_a.clone(), raw_t);
+    }
+    if let Some((before_dash, _)) = clean_t.split_once(" - ") {
+        let short_t = before_dash.trim();
+        if !short_t.is_empty() && short_t != clean_t {
+            push_unique(prim_a, short_t.to_owned());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -816,5 +1059,44 @@ mod tests {
         let at_break = active_karaoke(&data, 15_000).expect("line before solo");
         assert_eq!(at_break.text, "Before solo");
         assert_eq!(at_break.progress, 1.0);
+    }
+
+    #[test]
+    fn normalizes_noisy_linux_mpris_titles_and_multi_artists() {
+        assert_eq!(
+            strip_title_noise("Overdose (Official Music Video) [feat. Someone] | Channel"),
+            "Overdose"
+        );
+        assert_eq!(strip_title_noise("Song (Night Version) (Remastered 2023)"), "Song (Night Version)");
+        assert_eq!(clean_artist_name("YOASOBI - Topic"), "YOASOBI");
+
+        let from_youtube = build_search_candidates("", "Natori - Overdose (official audio)");
+        assert_eq!(from_youtube[0], ("Natori".to_owned(), "Overdose".to_owned()));
+
+        let multi = build_search_candidates("Artist A, Artist B", "Track Name (feat. Artist B)");
+        assert!(multi.contains(&("Artist A, Artist B".to_owned(), "Track Name".to_owned())));
+        assert!(multi.contains(&("Artist A".to_owned(), "Track Name".to_owned())));
+    }
+
+    #[test]
+    fn search_ranking_prefers_synced_and_matching_duration() {
+        let mut results = vec![
+            LrcLibResponse {
+                artist_name: Some("Tester".to_owned()),
+                track_name: Some("Song".to_owned()),
+                duration: Some(200.0),
+                synced_lyrics: None,
+                plain_lyrics: Some("Just plain lyrics".to_owned()),
+            },
+            LrcLibResponse {
+                artist_name: Some("Tester".to_owned()),
+                track_name: Some("Song".to_owned()),
+                duration: Some(201.0),
+                synced_lyrics: Some("[00:01.00]Synced line".to_owned()),
+                plain_lyrics: None,
+            },
+        ];
+        rank_search_results(&mut results, "Tester", "Song", None);
+        assert!(results[0].synced_lyrics.is_some());
     }
 }
