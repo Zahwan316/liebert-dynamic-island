@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Liebert Dynamic Island
+Comment=Lightweight native Rust Dynamic Island notification overlay
+Exec=liebert-dynamic-island
+Icon=liebert-dynamic-island
+Categories=Utility;
+Terminal=false
+StartupNotify=false

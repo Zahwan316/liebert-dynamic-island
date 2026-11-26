@@ -1,7 +1,12 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+/// Upper bound for pending notifications so a noisy source cannot grow memory without limit.
+pub const MAX_QUEUED_NOTIFICATIONS: usize = 32;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationItem {
     pub id: String,
     pub app_name: String,
@@ -18,7 +23,7 @@ pub enum IslandVisualState {
     Expanded,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ListenerStatus {
     Starting,
     Listening,
@@ -70,7 +75,6 @@ impl IslandState {
             return;
         }
         const MAX_BODY_BYTES: usize = 2000;
-        const MAX_QUEUE_LEN: usize = 32;
         if item.body.len() > MAX_BODY_BYTES {
             let mut cut = MAX_BODY_BYTES;
             while cut > 0 && !item.body.is_char_boundary(cut) {
@@ -95,7 +99,7 @@ impl IslandState {
         if self.active.is_none() {
             self.activate(item, now);
         } else {
-            if self.queue.len() >= MAX_QUEUE_LEN {
+            while self.queue.len() >= MAX_QUEUED_NOTIFICATIONS {
                 self.queue.pop_front();
             }
             self.queue.push_back(item);
@@ -285,6 +289,19 @@ mod tests {
         state.push_notification(sample("2", "Second Updated"), t0);
         assert_eq!(state.queued_count(), 1);
         assert_eq!(state.queue[0].title, "Second Updated");
+    }
+
+    #[test]
+    fn queue_is_bounded_for_unique_ids() {
+        let t0 = Instant::now();
+        let mut state = IslandState::new(false, Duration::from_secs(5));
+        state.push_notification(sample("active", "Active"), t0);
+        for i in 0..200 {
+            state.push_notification(sample(&format!("q{i}"), "Queued"), t0);
+        }
+        assert_eq!(state.queued_count(), MAX_QUEUED_NOTIFICATIONS);
+        assert_eq!(state.queue.front().map(|n| n.id.as_str()), Some("q168"));
+        assert_eq!(state.queue.back().map(|n| n.id.as_str()), Some("q199"));
     }
 
     #[test]

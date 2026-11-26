@@ -11,6 +11,7 @@ pub enum IconKind {
     MusicNote,
     TodoCheck,
     Calendar,
+    Timer,
     Shuffle,
     Previous,
     Play,
@@ -128,6 +129,11 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, kind: IconKind, color: Co
                 [Pos2::new(c.x + s * 0.18, pin_top), Pos2::new(c.x + s * 0.18, pin_bot)],
                 stroke,
             );
+        }
+        IconKind::Timer => {
+            painter.circle_stroke(c, s * 0.36, stroke);
+            painter.line_segment([c, Pos2::new(c.x, c.y - s * 0.22)], stroke);
+            painter.line_segment([c, Pos2::new(c.x + s * 0.16, c.y + s * 0.08)], stroke);
         }
         IconKind::Play => {
             let half_h = s * 0.34;

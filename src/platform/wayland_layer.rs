@@ -1,10 +1,7 @@
-use std::ffi::c_void;
 use std::io::{BufRead, BufReader};
-use std::num::NonZeroU32;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::ptr::NonNull;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -12,14 +9,6 @@ use calloop::EventLoop;
 use calloop::ping::make_ping;
 use calloop_wayland_source::WaylandSource;
 use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
-use glow::HasContext;
-use glutin::config::ConfigTemplateBuilder;
-use glutin::context::{ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext};
-use glutin::display::{Display, DisplayApiPreference, GlDisplay};
-use glutin::surface::{GlSurface, Surface, SurfaceAttributesBuilder, SwapInterval, WindowSurface};
-use raw_window_handle::{
-    RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
-};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
@@ -32,19 +21,22 @@ use smithay_client_toolkit::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
     LayerSurfaceConfigure,
 };
+use smithay_client_toolkit::shm::slot::{Buffer, SlotPool};
+use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat, registry_handlers,
+    delegate_seat, delegate_shm, registry_handlers,
 };
 use wayland_client::globals::registry_queue_init;
-use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_surface};
-use wayland_client::{Connection, Proxy, QueueHandle};
+use wayland_client::protocol::{wl_output, wl_pointer, wl_seat, wl_shm, wl_surface};
+use wayland_client::{Connection, QueueHandle};
 
 use crate::calendar::{self, CalendarCommand};
 use crate::config::Config;
 use crate::lyrics;
 use crate::platform::{self, linux};
 use crate::tray::TrayController;
+use crate::ui::soft_render::SoftCanvas;
 use crate::ui::{self, AppChannels, IslandApp, OverlayBackendMode, SETTINGS_WINDOW_TITLE};
 
 const LAYER_NAMESPACE: &str = "liebert-dynamic-island";
@@ -59,13 +51,18 @@ enum SettingsIpcCmd {
 
 struct WaylandState {
     registry_state: RegistryState,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
+    shm_state: Shm,
     seat_state: SeatState,
     output_state: OutputState,
-    layer: LayerSurface,
+    layer: Option<LayerSurface>,
     empty_region: Option<Region>,
     pointer: Option<wl_pointer::WlPointer>,
     configured: bool,
-    exit: bool,
+    ever_configured: bool,
+    surface_closed: bool,
+    needs_recreate: bool,
     needs_redraw: bool,
     scale_factor: i32,
     logical_width: u32,
@@ -73,6 +70,44 @@ struct WaylandState {
     pointer_inside: bool,
     last_pointer_pos: Pos2,
     pending_events: Vec<Event>,
+}
+
+impl WaylandState {
+    fn create_layer_surface(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        width: u32,
+        height: u32,
+        margin_top: i32,
+        visible: bool,
+    ) {
+        self.layer = None;
+        let wl_surface = self.compositor.create_surface(qh);
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            wl_surface,
+            Layer::Overlay,
+            Some(LAYER_NAMESPACE),
+            None,
+        );
+        layer.set_anchor(Anchor::TOP);
+        layer.set_exclusive_zone(-1);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.set_margin(margin_top, 0, 0, 0);
+        layer.set_size(width.max(1), height.max(1));
+        if !visible && let Some(region) = &self.empty_region {
+            layer.wl_surface().set_input_region(Some(region.wl_region()));
+        }
+        layer.commit();
+
+        self.configured = false;
+        self.surface_closed = false;
+        self.needs_recreate = false;
+        self.needs_redraw = true;
+        self.logical_width = width.max(1);
+        self.logical_height = height.max(1);
+        self.layer = Some(layer);
+    }
 }
 
 impl CompositorHandler for WaylandState {
@@ -83,11 +118,15 @@ impl CompositorHandler for WaylandState {
         surface: &wl_surface::WlSurface,
         new_factor: i32,
     ) {
-        if self.layer.wl_surface() == surface {
+        if self
+            .layer
+            .as_ref()
+            .is_some_and(|layer| layer.wl_surface() == surface)
+        {
             let next = new_factor.max(1);
             if next != self.scale_factor {
+                // Defer set_buffer_scale until a matching sized wl_shm buffer is attached atomically.
                 self.scale_factor = next;
-                self.layer.wl_surface().set_buffer_scale(next);
                 self.needs_redraw = true;
             }
         }
@@ -119,13 +158,15 @@ impl CompositorHandler for WaylandState {
         surface: &wl_surface::WlSurface,
         output: &wl_output::WlOutput,
     ) {
-        if self.layer.wl_surface() == surface
+        if self
+            .layer
+            .as_ref()
+            .is_some_and(|layer| layer.wl_surface() == surface)
             && let Some(info) = self.output_state.info(output)
         {
             let next = info.scale_factor.max(1);
             if next != self.scale_factor {
                 self.scale_factor = next;
-                self.layer.wl_surface().set_buffer_scale(next);
                 self.needs_redraw = true;
             }
         }
@@ -152,6 +193,10 @@ impl OutputHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
+        if self.layer.is_none() {
+            self.needs_recreate = true;
+        }
+        self.needs_redraw = true;
     }
 
     fn update_output(
@@ -160,6 +205,7 @@ impl OutputHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
+        self.needs_redraw = true;
     }
 
     fn output_destroyed(
@@ -168,30 +214,58 @@ impl OutputHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _output: wl_output::WlOutput,
     ) {
+        self.needs_redraw = true;
+    }
+}
+
+impl ShmHandler for WaylandState {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.shm_state
     }
 }
 
 impl LayerShellHandler for WaylandState {
-    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _layer: &LayerSurface) {
-        self.exit = true;
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
+        if self
+            .layer
+            .as_ref()
+            .is_some_and(|active| active == layer)
+        {
+            self.layer = None;
+            self.configured = false;
+            self.surface_closed = true;
+            self.needs_recreate = true;
+            if self.pointer_inside {
+                self.pointer_inside = false;
+                self.pending_events.push(Event::PointerGone);
+            }
+            self.needs_redraw = true;
+        }
     }
 
     fn configure(
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _layer: &LayerSurface,
+        layer: &LayerSurface,
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        if configure.new_size.0 > 0 {
-            self.logical_width = configure.new_size.0;
+        if self
+            .layer
+            .as_ref()
+            .is_some_and(|active| active == layer)
+        {
+            if configure.new_size.0 > 0 {
+                self.logical_width = configure.new_size.0;
+            }
+            if configure.new_size.1 > 0 {
+                self.logical_height = configure.new_size.1;
+            }
+            self.configured = true;
+            self.ever_configured = true;
+            self.needs_redraw = true;
         }
-        if configure.new_size.1 > 0 {
-            self.logical_height = configure.new_size.1;
-        }
-        self.configured = true;
-        self.needs_redraw = true;
     }
 }
 
@@ -242,8 +316,11 @@ impl PointerHandler for WaylandState {
         _pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
+        let Some(active_surface) = self.layer.as_ref().map(|layer| layer.wl_surface()) else {
+            return;
+        };
         for event in events {
-            if &event.surface != self.layer.wl_surface() {
+            if &event.surface != active_surface {
                 continue;
             }
             let pos = Pos2::new(event.position.0 as f32, event.position.1 as f32);
@@ -329,6 +406,7 @@ impl ProvidesRegistryState for WaylandState {
 
 delegate_compositor!(WaylandState);
 delegate_output!(WaylandState);
+delegate_shm!(WaylandState);
 delegate_layer!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_pointer!(WaylandState);
@@ -341,6 +419,11 @@ fn map_wayland_button(button: u32) -> Option<PointerButton> {
         BTN_MIDDLE => Some(PointerButton::Middle),
         _ => None,
     }
+}
+
+/// Skip egui tessellation/raster work when nothing changed and no animation deadline passed.
+fn should_draw(needs_redraw: bool, repaint_after: Duration, since_last_draw: Duration) -> bool {
+    needs_redraw || repaint_after.is_zero() || since_last_draw >= repaint_after
 }
 
 fn spawn_settings_ipc_listener(
@@ -436,39 +519,30 @@ pub fn try_run_layer_shell(
         .map_err(|e| format!("wl_compositor unavailable: {e}"))?;
     let layer_shell = LayerShell::bind(&globals, &qh)
         .map_err(|e| format!("wlr-layer-shell unavailable: {e}"))?;
+    let shm_state =
+        Shm::bind(&globals, &qh).map_err(|e| format!("wl_shm unavailable: {e}"))?;
 
     linux::prepare_layer_shell_rules(LAYER_NAMESPACE);
 
     let init_w = initial_w.round().max(1.0) as u32;
     let init_h = initial_h.round().max(1.0) as u32;
     let init_margin_top = initial_y.round() as i32;
-
-    let wl_surface = compositor.create_surface(&qh);
-    let layer = layer_shell.create_layer_surface(
-        &qh,
-        wl_surface,
-        Layer::Overlay,
-        Some(LAYER_NAMESPACE),
-        None,
-    );
-    layer.set_anchor(Anchor::TOP);
-    layer.set_exclusive_zone(-1);
-    layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-    layer.set_margin(init_margin_top, 0, 0, 0);
-    layer.set_size(init_w, init_h);
-    layer.commit();
-
     let empty_region = Region::new(&compositor).ok();
 
     let mut wl_state = WaylandState {
         registry_state: RegistryState::new(&globals),
+        compositor,
+        layer_shell,
+        shm_state,
         seat_state: SeatState::new(&globals, &qh),
         output_state: OutputState::new(&globals, &qh),
-        layer,
+        layer: None,
         empty_region,
         pointer: None,
         configured: false,
-        exit: false,
+        ever_configured: false,
+        surface_closed: false,
+        needs_recreate: false,
         needs_redraw: true,
         scale_factor: 1,
         logical_width: init_w,
@@ -477,60 +551,31 @@ pub fn try_run_layer_shell(
         last_pointer_pos: Pos2::ZERO,
         pending_events: Vec::new(),
     };
+    wl_state.create_layer_surface(&qh, init_w, init_h, init_margin_top, !config.auto_hide_when_idle);
 
-    while !wl_state.configured && !wl_state.exit {
+    let startup_deadline = Instant::now() + Duration::from_secs(2);
+    while !wl_state.configured && Instant::now() < startup_deadline {
         event_queue
             .blocking_dispatch(&mut wl_state)
             .map_err(|e| format!("Wayland initial configure failed: {e}"))?;
+        if wl_state.surface_closed {
+            // If compositor had no outputs ready yet, wait cleanly in the main loop;
+            // only abort before entering if outputs were present and still rejected immediately.
+            break;
+        }
     }
-    if wl_state.exit {
-        return Ok(());
+    if wl_state.surface_closed && wl_state.output_state.outputs().next().is_some() {
+        return Err("wlr-layer-shell surface closed before first configure".to_owned());
     }
 
-    let display_ptr = NonNull::new(conn.backend().display_ptr() as *mut c_void)
-        .ok_or_else(|| "Null Wayland display pointer".to_owned())?;
-    let raw_display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(display_ptr));
-    let gl_display = unsafe { Display::new(raw_display, DisplayApiPreference::Egl) }
-        .map_err(|e| format!("EGL display init failed: {e}"))?;
-
-    let template = ConfigTemplateBuilder::new()
-        .with_transparency(true)
-        .with_alpha_size(8)
-        .build();
-    let gl_config = unsafe { gl_display.find_configs(template) }
-        .map_err(|e| format!("EGL config lookup failed: {e}"))?
-        .next()
-        .ok_or_else(|| "No transparent EGL config found".to_owned())?;
-
-    let surface_ptr = NonNull::new(wl_state.layer.wl_surface().id().as_ptr() as *mut c_void)
-        .ok_or_else(|| "Null wl_surface pointer".to_owned())?;
-    let raw_window = RawWindowHandle::Wayland(WaylandWindowHandle::new(surface_ptr));
-
-    let ctx_attrs = ContextAttributesBuilder::new().build(Some(raw_window));
-    let not_current_ctx = unsafe { gl_display.create_context(&gl_config, &ctx_attrs) }
-        .map_err(|e| format!("EGL context creation failed: {e}"))?;
-
-    let scale = wl_state.scale_factor.max(1) as u32;
-    let fb_w = NonZeroU32::new((wl_state.logical_width * scale).max(1)).unwrap();
-    let fb_h = NonZeroU32::new((wl_state.logical_height * scale).max(1)).unwrap();
-    let surf_attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(raw_window, fb_w, fb_h);
-    let gl_surface: Surface<WindowSurface> =
-        unsafe { gl_display.create_window_surface(&gl_config, &surf_attrs) }
-            .map_err(|e| format!("EGL window surface creation failed: {e}"))?;
-
-    let gl_context: PossiblyCurrentContext = not_current_ctx
-        .make_current(&gl_surface)
-        .map_err(|e| format!("EGL make_current failed: {e}"))?;
-    let _ = gl_surface.set_swap_interval(&gl_context, SwapInterval::DontWait);
-
-    let gl = Arc::new(unsafe {
-        glow::Context::from_loader_function_cstr(|name| gl_display.get_proc_address(name))
-    });
-    let mut painter = egui_glow::Painter::new(gl, "", None, false)
-        .map_err(|e| format!("egui_glow Painter init failed: {e}"))?;
+    // 512 KB initial SHM pool covers the idle/compact pill without GPU driver overhead.
+    let mut pool = SlotPool::new(512 * 1024, &wl_state.shm_state)
+        .map_err(|e| format!("wl_shm SlotPool init failed: {e}"))?;
+    let mut soft_canvas = SoftCanvas::new();
+    let mut active_buffer: Option<Buffer> = None;
 
     let egui_ctx = egui::Context::default();
-    ui::install_base_fallback_fonts(&egui_ctx);
+    ui::apply_configured_fonts(&egui_ctx, &config.font_name);
 
     let mut event_loop: EventLoop<WaylandState> =
         EventLoop::try_new().map_err(|e| format!("calloop init failed: {e}"))?;
@@ -557,6 +602,7 @@ pub fn try_run_layer_shell(
 
     platform::spawn_listener(event_tx.clone(), wake.clone());
     platform::spawn_media_listener(event_tx.clone(), media_cmd_rx, wake.clone());
+    platform::spawn_fullscreen_watcher(event_tx.clone(), wake.clone());
     lyrics::spawn_lyrics_worker(lyrics_req_rx, event_tx.clone(), wake.clone());
     calendar::spawn_calendar_worker(
         config.google_calendar_ics_url.clone(),
@@ -567,7 +613,7 @@ pub fn try_run_layer_shell(
 
     let (settings_tx, settings_rx) = mpsc::channel();
     let ipc_sock_path = spawn_settings_ipc_listener(settings_tx, ping);
-    let mut cleanup = SocketCleanup(ipc_sock_path.clone(), None);
+    let mut cleanup = SocketCleanup(ipc_sock_path, None);
 
     let mut app = IslandApp::new(
         config,
@@ -576,17 +622,24 @@ pub fn try_run_layer_shell(
             lyrics_req_tx,
             media_cmd_tx,
             calendar_cmd_tx,
+            ui_ctrl_rx: None,
+            daemon_tx: None,
         },
         tray,
         demo_mode,
     );
 
     let start_time = Instant::now();
-    let mut applied_w = init_w;
-    let mut applied_h = init_h;
-    let mut applied_margin_top = init_margin_top;
-    let mut applied_visible = true;
-    let mut applied_scale = wl_state.scale_factor.max(1);
+    let mut committed_w = init_w;
+    let mut committed_h = init_h;
+    let mut committed_margin_top = init_margin_top;
+    let mut committed_visible = wl_state.layer.is_some();
+    let mut committed_scale = wl_state.scale_factor.max(1);
+    let mut hidden_frame_committed = false;
+    let mut fallback_reason: Option<String> = None;
+    let mut last_draw = Instant::now();
+    let mut last_recreate_attempt = Instant::now() - Duration::from_secs(5);
+    let mut recreate_backoff = Duration::from_millis(120);
 
     loop {
         while let Ok(cmd) = settings_rx.try_recv() {
@@ -616,7 +669,7 @@ pub fn try_run_layer_shell(
             wl_state.pointer_inside,
         );
 
-        if step.want_exit || wl_state.exit {
+        if step.want_exit {
             break;
         }
         if step.open_settings_requested {
@@ -636,54 +689,140 @@ pub fn try_run_layer_shell(
         let want_margin_top = step.top_y.round() as i32;
         let cur_scale = wl_state.scale_factor.max(1);
 
-        let mut layer_dirty = false;
-        if step.visible != applied_visible {
-            applied_visible = step.visible;
-            if step.visible {
-                wl_state.layer.wl_surface().set_input_region(None);
-            } else if let Some(region) = &wl_state.empty_region {
-                wl_state
-                    .layer
-                    .wl_surface()
-                    .set_input_region(Some(region.wl_region()));
-                wl_state.pointer_inside = false;
+        // Recreate layer surface cleanly after Hyprland DPMS sleep, monitor hotplug, or config reload.
+        if wl_state.layer.is_none() || wl_state.surface_closed || wl_state.needs_recreate {
+            active_buffer = None;
+            hidden_frame_committed = false;
+            if wl_state.output_state.outputs().next().is_some()
+                && last_recreate_attempt.elapsed() >= recreate_backoff
+            {
+                last_recreate_attempt = Instant::now();
+                recreate_backoff = (recreate_backoff * 2).min(Duration::from_secs(2));
+                linux::prepare_layer_shell_rules(LAYER_NAMESPACE);
+                wl_state.create_layer_surface(&qh, want_w, want_h, want_margin_top, step.visible);
+                committed_w = want_w;
+                committed_h = want_h;
+                committed_margin_top = want_margin_top;
+                committed_visible = step.visible;
+                committed_scale = 1;
+                let _ = conn.flush();
             }
-            layer_dirty = true;
-        }
-        if want_w != applied_w || want_h != applied_h {
-            applied_w = want_w;
-            applied_h = want_h;
-            wl_state.logical_width = want_w;
-            wl_state.logical_height = want_h;
-            wl_state.layer.set_size(want_w, want_h);
-            layer_dirty = true;
-        }
-        if want_margin_top != applied_margin_top {
-            applied_margin_top = want_margin_top;
-            wl_state.layer.set_margin(want_margin_top, 0, 0, 0);
-            layer_dirty = true;
-        }
-        if cur_scale != applied_scale {
-            applied_scale = cur_scale;
-            layer_dirty = true;
-        }
-        if layer_dirty {
-            let phys_w = NonZeroU32::new((want_w * cur_scale as u32).max(1)).unwrap();
-            let phys_h = NonZeroU32::new((want_h * cur_scale as u32).max(1)).unwrap();
-            wl_state.layer.wl_surface().set_buffer_scale(cur_scale);
-            gl_surface.resize(&gl_context, phys_w, phys_h);
-            wl_state.layer.commit();
-            wl_state.needs_redraw = true;
+            if event_loop
+                .dispatch(Some(Duration::from_millis(60)), &mut wl_state)
+                .is_err()
+            {
+                if !wl_state.ever_configured {
+                    fallback_reason = Some("Wayland event loop dispatch failed".to_owned());
+                }
+                break;
+            }
+            continue;
         }
 
-        let phys_w_px = (applied_w * cur_scale as u32).max(1);
-        let phys_h_px = (applied_h * cur_scale as u32).max(1);
+        if !wl_state.configured {
+            if event_loop
+                .dispatch(Some(Duration::from_millis(20)), &mut wl_state)
+                .is_err()
+            {
+                if !wl_state.ever_configured {
+                    fallback_reason = Some("Wayland initial configure dispatch failed".to_owned());
+                }
+                break;
+            }
+            continue;
+        }
+
+        // Surface has been healthy and configured; reset recreation backoff.
+        if last_recreate_attempt.elapsed() > Duration::from_secs(2) {
+            recreate_backoff = Duration::from_millis(120);
+        }
+
+        let Some(layer) = wl_state.layer.as_ref() else {
+            continue;
+        };
+        let wl_surface = layer.wl_surface();
+
+        if !step.visible {
+            let need_hidden_commit = !hidden_frame_committed
+                || committed_visible
+                || want_margin_top != committed_margin_top;
+            if need_hidden_commit {
+                if committed_visible && let Some(region) = &wl_state.empty_region {
+                    wl_surface.set_input_region(Some(region.wl_region()));
+                    wl_state.pointer_inside = false;
+                }
+                if committed_w != 1 || committed_h != 1 {
+                    layer.set_size(1, 1);
+                }
+                if want_margin_top != committed_margin_top {
+                    layer.set_margin(want_margin_top, 0, 0, 0);
+                }
+                if committed_scale != 1 {
+                    wl_surface.set_buffer_scale(1);
+                }
+                if let Ok((buffer, bytes)) =
+                    pool.create_buffer(1, 1, 4, wl_shm::Format::Argb8888)
+                {
+                    bytes[..4].fill(0);
+                    let _ = buffer.attach_to(wl_surface);
+                    wl_surface.damage_buffer(0, 0, 1, 1);
+                    wl_surface.commit();
+                    active_buffer = Some(buffer);
+                } else {
+                    wl_surface.commit();
+                }
+                let _ = conn.flush();
+                committed_w = 1;
+                committed_h = 1;
+                committed_margin_top = want_margin_top;
+                committed_visible = false;
+                committed_scale = 1;
+                hidden_frame_committed = true;
+                wl_state.needs_redraw = false;
+                wl_state.pending_events.clear();
+            }
+
+            if event_loop
+                .dispatch(Some(Duration::from_millis(80)), &mut wl_state)
+                .is_err()
+            {
+                if !wl_state.ever_configured {
+                    fallback_reason = Some("Wayland event loop dispatch failed".to_owned());
+                }
+                break;
+            }
+            continue;
+        }
+
+        hidden_frame_committed = false;
+        let state_changed = !committed_visible
+            || want_w != committed_w
+            || want_h != committed_h
+            || want_margin_top != committed_margin_top
+            || cur_scale != committed_scale;
+
+        if !state_changed && !should_draw(wl_state.needs_redraw, step.repaint_after, last_draw.elapsed()) {
+            if event_loop
+                .dispatch(Some(Duration::from_millis(20)), &mut wl_state)
+                .is_err()
+            {
+                if !wl_state.ever_configured {
+                    fallback_reason = Some("Wayland event loop dispatch failed".to_owned());
+                }
+                break;
+            }
+            continue;
+        }
+        last_draw = Instant::now();
+
+        let phys_w_px = (want_w * cur_scale as u32).max(1);
+        let phys_h_px = (want_h * cur_scale as u32).max(1);
         let ppp = cur_scale as f32;
 
         let raw_input = RawInput {
             screen_rect: Some(Rect::from_min_size(
                 Pos2::ZERO,
-                Vec2::new(applied_w as f32, applied_h as f32),
+                Vec2::new(want_w as f32, want_h as f32),
             )),
             time: Some(start_time.elapsed().as_secs_f64()),
             events: std::mem::take(&mut wl_state.pending_events),
@@ -691,28 +830,47 @@ pub fn try_run_layer_shell(
         };
 
         egui_ctx.set_pixels_per_point(ppp);
-        let mut full_output = egui_ctx.run_ui(raw_input, |ui| {
-            if step.visible {
-                app.render_island_ui(ui, false);
-            }
+        let full_output = egui_ctx.run_ui(raw_input, |ui| {
+            app.render_island_ui(ui, false);
         });
 
         let clipped_primitives = egui_ctx.tessellate(full_output.shapes, ppp);
-        unsafe {
-            painter
-                .gl()
-                .viewport(0, 0, phys_w_px as i32, phys_h_px as i32);
+        soft_canvas.update_textures_before_paint(&full_output.textures_delta);
+
+        let stride = (phys_w_px * 4) as i32;
+        if let Ok((buffer, bytes)) = pool.create_buffer(
+            phys_w_px as i32,
+            phys_h_px as i32,
+            stride,
+            wl_shm::Format::Argb8888,
+        ) {
+            soft_canvas.rasterize(phys_w_px, phys_h_px, ppp, &clipped_primitives, bytes, true);
+
+            if !committed_visible {
+                wl_surface.set_input_region(None);
+            }
+            if want_w != committed_w || want_h != committed_h {
+                layer.set_size(want_w, want_h);
+            }
+            if want_margin_top != committed_margin_top {
+                layer.set_margin(want_margin_top, 0, 0, 0);
+            }
+            if cur_scale != committed_scale {
+                wl_surface.set_buffer_scale(cur_scale);
+            }
+            let _ = buffer.attach_to(wl_surface);
+            wl_surface.damage_buffer(0, 0, phys_w_px as i32, phys_h_px as i32);
+            wl_surface.commit();
+            active_buffer = Some(buffer);
+
+            committed_w = want_w;
+            committed_h = want_h;
+            committed_margin_top = want_margin_top;
+            committed_visible = true;
+            committed_scale = cur_scale;
         }
-        painter.clear([phys_w_px, phys_h_px], [0.0, 0.0, 0.0, 0.0]);
-        if step.visible {
-            painter.paint_and_update_textures(
-                [phys_w_px, phys_h_px],
-                ppp,
-                &clipped_primitives,
-                &mut full_output.textures_delta,
-            );
-        }
-        let _ = gl_surface.swap_buffers(&gl_context);
+        soft_canvas.free_textures_after_paint(full_output.textures_delta);
+
         let _ = conn.flush();
         wl_state.needs_redraw = false;
 
@@ -722,10 +880,30 @@ pub fn try_run_layer_shell(
             step.repaint_after.min(Duration::from_millis(80))
         };
         if event_loop.dispatch(Some(wait), &mut wl_state).is_err() {
+            if !wl_state.ever_configured {
+                fallback_reason = Some("Wayland event loop dispatch failed".to_owned());
+            }
             break;
         }
     }
 
-    painter.destroy();
-    Ok(())
+    drop(active_buffer);
+    match fallback_reason {
+        Some(reason) => Err(reason),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wayland_redraw_is_skipped_until_something_changes() {
+        let interval = Duration::from_millis(80);
+        assert!(should_draw(true, interval, Duration::ZERO));
+        assert!(should_draw(false, Duration::ZERO, Duration::ZERO));
+        assert!(!should_draw(false, interval, Duration::from_millis(20)));
+        assert!(should_draw(false, interval, interval));
+    }
 }

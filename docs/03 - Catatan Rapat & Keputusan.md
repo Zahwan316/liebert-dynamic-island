@@ -133,10 +133,27 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
 - **Status:** Accepted
 - **Konteks:** Meskipun memakai envelope canvas selama animasi, memanggil `ViewportCommand::InnerSize`/`OuterPosition` pada frame awal dan akhir buka-tutup tetap menimbulkan lompatan posisi `1–2` frame karena `winit` menerapkan perintah viewport secara asinkron setelah `ui()` selesai. Selain itu, `ViewportCommand::Visible(bool)` di `winit 0.30` memanggil `SetWindowLongW` dari state internalnya (menghapus `WS_EX_NOACTIVATE` & `WS_POPUP`) serta `ShowWindow(SW_SHOW)` yang mencuri fokus foreground dari aplikasi fullscreen sehingga `is_foreground_fullscreen()` gagal. Jendela maximized dengan auto-hide taskbar Windows 11 (`work.bottom` selisih `2 px`) juga sempat salah terdeteksi sebagai fullscreen.
 - **Keputusan:**
-  1. **Permanent Fixed Canvas + Dynamic Click-Through:** Ukuran window root dikunci ke `permanent_canvas_size(config)` pada `y = 0.0` sepanjang waktu tanpa memanggil `InnerSize`/`OuterPosition` saat buka-tutup atau morph; area di luar pill dibuat click-through via `set_overlay_click_through` (`WS_EX_LAYERED | WS_EX_TRANSPARENT`).
+  1. **Permanent Fixed Canvas + Dynamic Click-Through (Windows):** Ukuran window root dikunci ke `permanent_canvas_size(config)` pada `y = 0.0` sepanjang waktu tanpa memanggil `InnerSize`/`OuterPosition` saat buka-tutup atau morph; area di luar pill dibuat click-through via `set_overlay_click_through` (`WS_EX_LAYERED | WS_EX_TRANSPARENT`).
   2. **Direct Win32 Visibility:** Mengganti `ViewportCommand::Visible` di Windows dengan `set_overlay_visible` yang memanggil `ShowWindow(hwnd, SW_HIDE / SW_SHOWNOACTIVATE)` langsung tanpa menyentuh `winit` `apply_diff`.
   3. **Accurate Fullscreen Bounds:** Menggunakan `DWMWA_EXTENDED_FRAME_BOUNDS` dan ambang batas taskbar `>= 20 px` (`is_rect_covering_monitor_as_fullscreen`) agar jendela maximized biasa tidak memicu auto-hide.
-- **Konsekuensi:** Flicker buka-tutup/morph hilang total, style `WS_EX_NOACTIVATE` dan fokus aplikasi fullscreen tetap terjaga, dan seluruh area di luar pill tetap bisa diklik menembus overlay.
+- **Konsekuensi:** Flicker buka-tutup/morph hilang total di Windows, style `WS_EX_NOACTIVATE` dan fokus aplikasi fullscreen tetap terjaga, dan seluruh area di luar pill tetap bisa diklik menembus overlay.
+
+## ADR-013b: Native Wayland `wlr-layer-shell`, Pill Translation, & Spring Physics
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pada Linux Wayland, window reguler `eframe`/`winit` terikat workspace sehingga tidak dapat melayang global di atas seluruh workspace dan layer seperti Quickshell. Selain itu, pengguna menginginkan baris terjemahan ringkas di idle/compact pill dan animasi pegas harmonik ala Dynamic Island macOS.
+- **Keputusan:**
+  1. **Native Wayland `wlr-layer-shell` (`src/platform/wayland_layer.rs`):** Di Linux Wayland, overlay utama dijalankan langsung di atas `zwlr_layer_surface_v1` (`Layer::Overlay`, `Anchor::TOP`, `exclusive_zone = -1`, `KeyboardInteractivity::None`) menggunakan `smithay-client-toolkit 0.19` + `glutin 0.32` EGL + `egui_glow 0.37` + `calloop 0.13`, ditambah `hl.layer_rule` Hyprland (`order = -1`, `above_lock = false`, `no_anim = true`, `blur = false`). Dengan ini overlay terpisah penuh dari seluruh workspace, tetap tepat di atas Quickshell namun di bawah lockscreen dan layer overlay ber-order lebih tinggi, serta memakai region input kosong (`set_input_region`) saat tersembunyi. Mode `--settings --ipc-sock` menangani jendela Settings interaktif secara terpisah lewat `eframe` dengan sinkronisasi live via UNIX socket. Jalur `eframe` tetap dipertahankan sebagai fallback otomatis untuk X11/compositor non-`wlr-layer-shell` dan Windows.
+  2. **Pill Lyric Translation (`show_pill_translation`):** Menambahkan `Config::show_pill_translation` (default `true`) beserta checkbox di Settings (`Music & Synced Lyrics`), serta memperluas `IdleDisplayMode::Lyrics` agar merender baris terjemahan di bawah lirik utama (`44 px * scale` saat terjemahan tersedia).
+  3. **Animasi Spring Bouncy ala macOS (`step_spring`):** Mengganti animasi eksponensial di `src/ui/mod.rs` dengan fisika pegas harmonik teredam 2nd-order ber-substep (`omega_x`/`omega_y` & `zeta` berbeda untuk expand vs collapse serta pop-in saat `became_visible`), dilengkapi animasi spring `notch_morph` dan pacing `6 ms` pada runner Wayland.
+- **Konsekuensi:** Di Wayland (`Hyprland`/`Sway`/`River`/`Niri`), Dynamic Island tidak pernah lagi masuk atau berpindah ke workspace aplikasi biasa dan posisinya stabil di top-center di atas Quickshell.
+
+## ADR-015: Lisensi GPL-3.0 (`LICENSE.md`), Transisi Lirik Fade-Up/Down, & Release Workflow
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Proyek memerlukan berkas `LICENSE.md` yang kompatibel dengan dependensi `kakasi 0.1` (`GPL-3.0`), animasi pergantian baris lirik yang lebih halus di pill mode (`IdleDisplayMode::Lyrics`), serta otomatisasi rilis lintas OS Windows & Linux.
+- **Keputusan:** Menetapkan `GPL-3.0-or-later` pada `LICENSE.md` & `Cargo.toml`, menambahkan `PillLyricTransition` (`240 ms` fade-up/down terklip berdasarkan `ActiveKaraoke::line_index`) di `src/ui/mod.rs`, dan menambahkan `.github/workflows/release.yml` untuk membangun rilis Windows (`.zip`) dan Linux (`AppImage` + `.tar.gz`).
+- **Konsekuensi:** Seluruh distribusi biner memiliki lisensi yang sah, transisi lirik di pill terasa mulus di `>= 60 FPS`, dan rilis Windows + Linux otomatis tersedia setiap tag `v*` didorong ke GitHub.
 
 ## ADR-014: Pomodoro Timer, Font Perangkat, Karaoke Translate, & Windowed-Fullscreen
 - **Tanggal:** 2026-11-26
@@ -147,3 +164,52 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   2. **Device Font Picker:** `collect_fonts_from_dirs` memindai direktori font OS (`.ttf`/`.otf`/`.ttc`) tanpa dependensi tambahan dan `apply_configured_fonts` menyisipkan font pilihan pada prioritas tertinggi `FontFamily::Proportional`.
   3. **Karaoke Translate & Pomodoro:** Menambah `KaraokeLyricMode::Translate` dan modul OS-agnostic `src/pomodoro.rs` (`Focus`/`ShortBreak`/`LongBreak`, notifikasi selesai fase, & countdown idle).
 - **Konsekuensi:** Seluruh preferensi tersimpan lokal di `config.toml`, tetap kompatibel dengan `#[serde(default)]`.
+
+## ADR-016: Text Alignment, Perlindungan Close Linux, & Batas Memori
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pengguna meminta pengaturan perataan teks (kiri/kanan/tengah) lewat tombol di Settings, melaporkan aplikasi Linux seolah-olah selalu di-force-close, serta RAM yang terus naik seiring waktu.
+- **Keputusan:**
+  1. **Text Alignment:** `TextAlign` (`Left`/`Center`/`Right`, default `Left`) ditambahkan ke `Config` dengan tombol segmented di Settings Appearance. Renderer memakai `egui_align` untuk layout dan `aligned_galley_x` untuk galley/`Painter` manual (karaoke idle & kartu musik, judul/artis, dot clock) agar perilaku konsisten lintas backend.
+  2. **Daur hidup Linux:** `IslandApp::ui` mengirim `ViewportCommand::CancelClose` saat WM meminta close; `TrayAction::Exit` adalah satu-satunya jalur keluar (Close di eframe, `want_exit` di layer-shell). Auto-hide/fullscreen pada eframe Linux memakai viewport `1×1`, bukan `Visible(false)`. Compositor yang mematikan layer surface mengubah `try_run_layer_shell` menjadi `Err` sehingga fallback eframe di `main.rs` benar-benar berjalan.
+  3. **Stabilitas memori:** `textures_delta` selalu di-drain walau tersembunyi (mencegah kebocoran tekstur GL), loop Wayland menjumpai frame idle tanpa tessellation/GL, antrean notifikasi dibatasi 32, cache lirik memakai FIFO bounded, alert kalender dipangkas 1 hari, dan font hanya dipindai sekali.
+- **Konsekuensi:** Preferensi alignment persist di `config.toml` tanpa merusak konfigurasi lama (`#[serde(default)]`); aplikasi tidak lagi berhenti karena close request WM/auto-hide; penggunaan RAM tidak bertumbuh tak terbatas pada sesi panjang. Terverifikasi dengan `cargo test` (41 tests) dan `cargo clippy --all-targets -- -D warnings`. Lihat [[04 - Changelog & Dev Log]].
+
+## ADR-017: Kemasan Rilis v0.1.0 (AppImage, tar.gz, AUR, NSIS)
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pengguna meminta AppImage, rilis Linux `.tar.gz`, paket AUR, dan installer Windows, lalu mendorong semuanya ke `main` dan mempublikasikan rilis `v0.1.0`.
+- **Keputusan:**
+  1. **Aset bersama:** `.desktop` dan ikon PNG 256×256 disimpan di `assets/` dan dipakai ulang oleh AppImage, tar.gz, dan AUR; generator ikon inline dihapus dari `scripts/build-appimage.sh`.
+  2. **Linux:** `scripts/build-linux-release.sh` menghasilkan AppImage + arsip tar.gz berisi binary, lisensi, README, `.desktop`, dan ikon.
+  3. **AUR:** `packaging/aur/PKGBUILD` membangun dari tag git `v0.1.0` dengan `cargo --locked`; `sha256sums=('SKIP')` dipakai secara sah untuk sumber VCS dan `.SRCINFO` digenerate dengan `makepkg --printsrcinfo`.
+  4. **Windows:** `installer/windows/installer.nsi` menghasilkan `setup.exe` NSIS per-user (shortcut Start Menu + uninstaller), dibangun di runner Windows GitHub Actions karena `makensis` tidak tersedia di mesin pengembangan Linux. Arsip `.zip` portable tetap dipertahankan.
+  5. **Publikasi:** Workflow release membangun keempat aset plus bundel AUR pada tag `v*`; tag `v0.1.0` didorong setelah `main` agar GitHub Release terbit otomatis.
+- **Konsekuensi:** Pengguna Windows mendapat wizard instalasi, pengguna Linux memilih AppImage/tar.gz/AUR, dan semua aset memiliki lisensi yang sama. Submit ke AUR tetap manual karena memerlukan akun maintainer; CI tidak dapat melakukannya. Lihat [[04 - Changelog & Dev Log]].
+
+## ADR-018: Pure-Rust CPU Rasterizer (`SoftCanvas`), Wayland `wl_shm` Recovery, & Win32 `UpdateLayeredWindow`
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pasca merge PR #15 (`0c9daa4`), proses overlay `eframe`/`glutin`/`egui_glow` tetap menarik pustaka OpenGL/EGL/WGL (40–120 MB RSS dari driver Mesa/NVIDIA/WGL ICD), serta memicu hilangnya Dynamic Island di Hyprland sambil ikon tray tetap berjalan (akibat commit `set_buffer_scale` sebelum buffer serasi dan kegagalan `surface_closed` yang memicu fallback `xdg_toplevel` non-layer-shell).
+- **Keputusan:**
+  1. **Pure-Rust CPU Rasterizer (`src/ui/soft_render.rs`):** Merasterisasi `egui::ClippedPrimitive` langsung ke buffer premultiplied BGRA dengan top-left edge fill rule (mencegah double-blend diagonal) serta pelepasan delta tekstur secara langsung tanpa konteks OpenGL/EGL.
+  2. **Wayland `wl_shm` + Auto-Recovery (`src/platform/wayland_layer.rs`):** Mengganti `glutin`/`glow`/`egui_glow` dengan `smithay-client-toolkit` `wl_shm::SlotPool` (`512 KB`), mewajibkan `set_buffer_scale` dan attach buffer dalam satu commit atomik, menambahkan `spawn_fullscreen_watcher` & `apply_configured_fonts`, dan merekonstruksi `LayerSurface` otomatis saat `ZwlrLayerSurfaceV1::Closed` / `new_output` terjadi setelah DPMS atau reload Hyprland.
+  3. **Win32 `UpdateLayeredWindow` (`src/platform/windows_overlay.rs`) + `--settings` Terpisah (`src/ui/settings.rs`):** Overlay utama Windows dirender via DIB 32-bit BGRA + `UpdateLayeredWindow` (zero WGL/OpenGL driver DLL, native click-through alpha = 0); `eframe` hanya dimuat di proses child `--settings --ipc-addr` saat jendela Settings dibuka lalu dibebaskan saat ditutup.
+  4. **Optimasi Font & MPRIS D-Bus (`src/platform/{linux,windows,mod}.rs`, `src/ui/mod.rs`):** Memangkas font eager Linux/Windows, memuat tepat satu index face TTC per `CjkScript`, melepaskan tekstur album/gradient saat media kosong & daftar font saat Settings tutup, serta memakai ulang proxy `zbus` `CacheProperties::No`.
+- **Konsekuensi:** Target RAM `< 20 MB` (`Pss 8.5 MB` / `VmRSS 11.2 MB` terukur pada daemon headless Linux) tercapai tanpa dependensi langsung `libGL`/`libEGL`; hilangnya overlay di Hyprland saat sleep/reload teratasi tanpa jatuh ke window reguler. Jalur fallback `eframe` tetap dipertahankan untuk X11 dan jendela Settings. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[04 - Changelog & Dev Log]].
+
+## ADR-019: Sinkronisasi MPRIS2 Presisi & Multi-Candidate LRCLIB Fetch (v0.1.1)
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pada Linux, pemutar musik seperti Chromium/Firefox/Spotify/MPV sering mengombinasikan beberapa bus MPRIS sekaligus, mengirim `mpris:length` bertipe `u64`, menunda pembaruan `Position` pada `GetAll`, menempelkan suffix seperti `(Official Video)` / `- Topic`, dan mengalami selisih timestamp saat `load_art_from_url` melakukan download HTTP cover album. Selain itu, LRCLIB gagal ditemukan saat metadata `artist` kosong atau berisi daftar multi-artis.
+- **Keputusan:**
+  1. **Seleksi & Sampling MPRIS2 (`src/platform/linux.rs`):** Menilai seluruh bus `org.mpris.MediaPlayer2.*` (`Playing` prioritas utama), mendukung decoding angka fleksibel (`i64`/`u64`/`i32`/`u32`/`f64`) dan `xesam:artist` tunggal maupun array, mengambil `Position` eksplisit lewat `Properties.Get` tepat saat mencatat `Instant`, meng-ambil ulang `Position` pasca download cover art lambat, memakai `SetPosition` pada seek, dan memakai `evaluate_mpris_sync` berbasis drift + konfirmasi lag 2-poll.
+  2. **Multi-Candidate LRCLIB (`src/lyrics.rs`, `src/ui/mod.rs`, `src/daemon.rs`):** Membersihkan tag kebisingan dan suffix `- Topic`, memisahkan `Artist - Title` saat `artist` kosong, memecah artis utama, memprioritaskan hasil `synced_lyrics` walau tanpa durasi, mengulang fetch otomatis ketika `duration_ms` beralih `0 -> >0`, serta menambahkan tombol **Retry Fetch**.
+- **Konsekuensi:** Lirik tersinkron halus dengan playback/seek Linux tanpa lompatan balik dan tingkat keberhasilan pencarian LRCLIB meningkat untuk pemutar desktop maupun browser; versi dinaikkan ke `v0.1.1`. Lihat [[04 - Changelog & Dev Log]].
+
+## ADR-020: Pemulihan Fetch Album Cover MPRIS2 Linux (`data:`, Delayed URL, & `bmp`/`gif`) (v0.1.2)
+- **Tanggal:** 2026-11-26
+- **Status:** Accepted
+- **Konteks:** Pada Linux, album cover sering gagal muncul karena: (1) player seperti Spotify/Chromium mengisi `mpris:artUrl` sesudah metadata judul/artis sehingga `cached_art` dan `sync_album_art_texture` terlanjur mengunci status `None`, (2) browser/Electron mengirim thumbnail inline sebagai `data:image/...;base64,...`, (3) beberapa player mengirim `file://localhost/...` atau path lokal polos, dan (4) `open.spotify.com/image/*` atau kegagalan HTTP sementara gagal di-decode.
+- **Keputusan:** Menggunakan `ArtCacheState` yang melacak `(key, art_url)` + retry backoff 3 kali dalam thread MPRIS dengan satu `ureq::Agent` persisten, mendukung `data:image/...;base64,...`, `file://localhost/...`, fallback `open.spotify.com/image` → `i.scdn.co/image`, mengaktifkan fitur `bmp`/`gif` di crate `image`, memvalidasi perubahan pointer `Arc<AlbumArt>` pada `sync_album_art_texture`, serta mendokumentasikan alur rilis standar pengguna di `AGENTS.md`.
+- **Konsekuensi:** Album cover dari desktop player maupun browser ter-fetch dan ter-render konsisten meski `artUrl` datang terlambat; versi naik ke `v0.1.2`. Lihat [[04 - Changelog & Dev Log]].

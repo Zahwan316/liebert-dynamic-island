@@ -1,6 +1,7 @@
 # Liebert Dynamic Island (Lidi)
+> Lightweight native Rust Dynamic Island overlay for **Windows 10/11** and **Linux (X11/Wayland)** that surfaces system notifications, media controls, synced karaoke lyrics, a Pomodoro timer, a local todo list, and Google Calendar alerts at the top-center of your screen without stealing window focus.
 
-Lightweight native Rust Dynamic Island overlay for **Windows 10/11** and **Linux (X11/Wayland)** that surfaces system notifications, media controls, synced karaoke lyrics, a Pomodoro timer, a local todo list, and Google Calendar alerts at the top-center of your screen without stealing window focus.
+## UI
 
 ## Table of Contents
 
@@ -103,9 +104,26 @@ Lightweight native Rust Dynamic Island overlay for **Windows 10/11** and **Linux
 
 ### 1. Clone the Repository
 
+### Prebuilt releases
+
+Every `v*` GitHub Release contains:
+
+| Asset | Install |
+| :--- | :--- |
+| `Liebert_Dynamic_Island-0.1.2-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
+| `liebert-dynamic-island-linux-x86_64.tar.gz` | `tar -xzf`, then run `./liebert-dynamic-island-linux-x86_64/liebert-dynamic-island`. Includes `LICENSE.md`, `README.md`, `.desktop` and icon. |
+| `liebert-dynamic-island-windows-x86_64-setup.exe` | NSIS installer (per-user install, Start Menu shortcuts + uninstaller). |
+| `liebert-dynamic-island-windows-x86_64.zip` | Portable `.exe` + license + README. |
+| `liebert-dynamic-island-aur-0.1.2.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
+
+Arch Linux users can build from `packaging/aur/` with `makepkg -si` once the package is submitted to the AUR (`yay -S liebert-dynamic-island`). AUR submission itself needs a maintainer account and is **not** automated by CI.
+
+### Build from source
+
 ```sh
 git clone https://github.com/Gjenius20/liebert-dynamic-island.git
 cd liebert-dynamic-island
+cargo build --release --locked
 ```
 
 ### 2. Verify OS Notification Access (Optional Spike)
@@ -115,6 +133,22 @@ cargo run -- --spike-notifications
 ```
 
 Expected output on Windows:
+| Key | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `notch_dock_mode` | `bool` | `true` | `true` for seamless Top Notch, `false` for Floating Dynamic Island |
+| `scale` | `f32` | `1.0` | UI scale factor (`0.75`–`1.5`) |
+| `idle_width` / `expanded_width` | `f32` | `140.0` / `390.0` | Pill width in idle (`110`–`240`) and expanded (`320`–`520`) states |
+| `top_offset_px` | `f32` | `10.0` | Top margin in Floating Island mode (`0`–`60`) |
+| `auto_hide_when_idle` | `bool` | `false` | Automatically hide the overlay after `auto_hide_delay_secs` |
+| `auto_hide_delay_secs` | `u64` | `5` | Idle delay before auto-hiding (`0`–`60` seconds) |
+| `hide_in_fullscreen` | `bool` | `true` | Hide idle pill when a fullscreen or windowed-fullscreen app is active |
+| `idle_display` | `enum` | `Auto` | `Auto`, `Clock`, `Lyrics`, `NextEvent`, `Pomodoro`, or `Minimal` |
+| `clock_timezone` | `string` | `"Local"` | `"Local"` or any IANA timezone (e.g. `"Asia/Jakarta"`) |
+| `font_name` | `string` | `""` | Installed device font name (empty uses system default) |
+| `text_align` | `enum` | `Left` | Text alignment: `Left`, `Center`, or `Right` |
+| `karaoke_lyric_mode` | `enum` | `Original` | Primary karaoke text: `Original`, `Romaji`, or `Translate` |
+| `lyric_offset_ms` | `i64` | `0` | Lyric sync offset in milliseconds (`-5000`–`5000`) |
+| `google_calendar_ics_url` | `string` | `""` | Secret iCal `.ics` URL for Google Calendar sync |
 
 ```text
 SPIKE OK: Access: Allowed | Active toasts: <count> | Sample: ...
@@ -143,9 +177,13 @@ The stripped LTO binary is written to `target/release/liebert-dynamic-island.exe
 
 ```text
 liebert-dynamic-island/
-├── Cargo.toml                   # Manifest, dependencies, release profile & cargo-packager metadata
-├── AGENTS.md                    # Collaboration guide, module boundaries & engineering standards
-├── docs/                        # Obsidian project notes, ADRs, dev log & MVP PRD
+├── Cargo.toml
+├── AGENTS.md
+├── assets/                      # Shared .desktop entry & 256x256 app icon
+├── docs/                        # Obsidian project notes & MVP PRD
+├── installer/windows/           # NSIS installer script
+├── packaging/aur/               # Arch Linux PKGBUILD + .SRCINFO
+├── scripts/                     # AppImage & Linux release build scripts
 └── src/
     ├── main.rs                  # Entry point, CLI flags (--demo, --spike-notifications), & worker threads
     ├── config.rs                # Local config.toml loader/saver, presets, & validation clamps
@@ -260,8 +298,12 @@ cargo clippy --all-targets -- -D warnings
 `Cargo.toml` includes `[package.metadata.packager]` for generating Windows installers (`.exe` NSIS and `.msi` WiX with built-in uninstall support) into `target/installer/`:
 
 ```sh
-cargo install cargo-packager --locked
-cargo packager --release
+cargo test                                 # Run all unit tests
+cargo clippy --all-targets -- -D warnings  # Run Clippy with warnings treated as errors
+cargo build --release                      # Build stripped LTO release binary
+./scripts/build-linux-release.sh           # Linux tar.gz + AppImage in dist/
+# Windows (with NSIS installed, from repo root):
+#   makensis /DAPP_VERSION=0.1.2 installer\windows\installer.nsi
 ```
 
 ---

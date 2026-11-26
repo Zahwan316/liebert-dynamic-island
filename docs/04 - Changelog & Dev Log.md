@@ -10,14 +10,94 @@ tags:
 
 ## 2026-11-26
 
+### Fixed
+
+- `src/platform/linux.rs`, `src/ui/mod.rs`: Memperbaiki bug album cover yang gagal ter-fetch atau gagal tampil pada pemutar musik Linux (**v0.1.2**):
+  - Memperbaiki kunci cache album (`ArtCacheState` di `src/platform/linux.rs`) yang sebelumnya mengunci `(title, artist)` walau `mpris:artUrl` masih kosong di poll awal; kini perubahan `art_url` (`None -> Some` atau URL baru) langsung diproses dan kegagalan sementara di-retry otomatis (backoff 2 s / 4 s, hingga 3 percobaan) memakai satu `ureq::Agent` bersama (timeout 6 s).
+  - Menambahkan dekoder URI `data:image/...;base64,...` (`decode_data_image_uri`, `decode_base64`) untuk cover inline dari Chromium/Firefox/Electron, dukungan `file://localhost/...` dan path lokal polos `/...` (plus fallback strip `?`/`#`), serta fallback URL Spotify `open.spotify.com/image/*` → `i.scdn.co/image/*` dan header `User-Agent`/`Accept` gambar (+1 unit test di `src/platform/linux.rs`).
+  - Memperbaiki `IslandApp::sync_album_art_texture` di `src/ui/mod.rs` agar perubahan `album_art` (`None -> Some` atau `Arc` baru) untuk lagu yang sama selalu memperbarui tekstur UI alih-alih terkunci oleh cache `(artist, title)`.
+
+### Changed
+
+- `AGENTS.md`, `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `src/ui/mod.rs`, `README.md`: Menambahkan fitur decoder `bmp` + `gif` pada crate `image`, mencatat preferensi alur rilis pengguna di `AGENTS.md` (auto bump versi, AppImage/installer, sync docs, auto-push branch aktif), serta menaikkan versi ke **`0.1.2`**. Lihat [[00 - Dashboard Proyek]], [[01 - Arsitektur & Spesifikasi]], dan [[03 - Catatan Rapat & Keputusan]].
+
+### Fixed
+
+- `src/platform/linux.rs`, `src/lyrics.rs`, `src/daemon.rs`, `src/ui/mod.rs`: Memperbaiki bug lirik gagal di-fetch dan gagal tersinkronisasi dengan pemutar musik di Linux (**v0.1.1**):
+  - **Pemilihan Player & Parsing Metadata MPRIS2 (`src/platform/linux.rs`):** Memilih bus `org.mpris.MediaPlayer2.*` yang benar-benar sedang `Playing` (atau `Paused` ber-judul, dengan preferensi non-browser / `playerctld` dibanding tab browser menganggur), membaca `mpris:length` dan `Position` untuk varian `i64`/`u64`/`i32`/`u32`/`f64`, mendukung `xesam:artist` bertipe `String` maupun `Array` (plus fallback `xesam:albumArtist`/`xesam:creator` & stem `xesam:url`), serta men-decode percent-encoding `%XX` pada `mpris:artUrl` (`file://`).
+  - **Sinkronisasi Timeline & Seeking (`src/platform/linux.rs`, `src/ui/mod.rs`):** Memanggil `org.freedesktop.DBus.Properties.Get(..., "Position")` secara eksplisit setiap `350 ms` saat playback, mencatat `updated_at` sebelum fetch `album_art` HTTP (dan mengambil ulang `Position` bila download cover memakan waktu `> 40 ms`), memakai tracker drift `evaluate_mpris_sync` dengan konfirmasi 2-poll untuk mencegah lompatan mundur pada player step 1 detik sekaligus mengoreksi seek maju/mundur/pause secara langsung, serta memakai `SetPosition(mpris:trackid, target_us)` (fallback `Seek` memakai posisi live terbaru). Posisi interpolasi di `current_playback_ms` turut di-clamp ke `duration_ms`.
+  - **Fetch & Ranking LRCLIB (`src/lyrics.rs`, `src/daemon.rs`, `src/ui/mod.rs`):** Menambahkan normalisasi `strip_bracket_noise`/`clean_artist_name`/`primary_artist`/`split_artist_and_title` (kasus YouTube `- Topic`, tag `(Official Video)`/`(feat. ...)`/`| ...`, & multi-artis), mengutamakan hasil `synced_lyrics` bahkan ketika durasi awal `0`, menaikkan timeout HTTP ke `10 s`, memicu ulang request otomatis saat `duration_ms` baru terisi dari `0`, serta menambah tombol **Retry Fetch** pada tab Music saat status `NotFound`.
+
+### Changed
+
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `src/ui/mod.rs`, `README.md`: Menaikkan versi paket & metadata rilis dari `0.1.0` ke **`0.1.1`** dan memperbarui bundel Linux `Liebert_Dynamic_Island-0.1.1-x86_64.AppImage`. Lihat [[00 - Dashboard Proyek]], [[01 - Arsitektur & Spesifikasi]], dan [[03 - Catatan Rapat & Keputusan]].
+
+### Added
+
+- `src/ui/soft_render.rs`, `src/ui/mod.rs`: Menambahkan rasterizer CPU pure-Rust (`SoftCanvas`, dengan 4 unit test untuk blending premultiplied alpha BGRA/RGBA, aturan diagonal top-left anti-seam, clip-rect HiDPI, dan delta tekstur parsial/free) untuk menghilangkan kebutuhan inisialisasi OpenGL/EGL/WGL dari proses overlay utama. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-018).
+- `src/platform/windows_overlay.rs`, `src/platform/mod.rs`, `src/main.rs`: Menambahkan backend overlay native Win32 berbasis `UpdateLayeredWindow` + DIB section top-down 32-bit BGRA (`try_run_layered_direct` & `run_layered_ipc_client`) yang bekerja langsung tanpa `eframe`/OpenGL GPU driver, sementara jendela Settings (`--settings --ipc-addr`) diluncurkan on-demand sebagai child process terpisah yang membebaskan seluruh memorinya saat ditutup. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-018).
+
+### Fixed
+
+- `src/state.rs`, `src/lyrics.rs`, `src/platform/linux.rs`, `src/daemon.rs`, `src/main.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Memperbaiki seluruh error kompilasi & regresi akibat merge PR #15 (`0c9daa4`):
+  - Memindahkan atribut `#[derive(...)]` kembali ke `NotificationItem` dan `LyricWord`; menyatukan batas antrean `MAX_QUEUED_NOTIFICATIONS` serta memulihkan `BoundedCache` (kapasitas 8/8 tanpa cache `NotFound`).
+  - Memulihkan `TrayController::new(auto_hide, notch_dock_mode)`, `TrayAction::ToggleDockMode`, `sync_tray`, tanda tangan `is_cursor_in_top_trigger`, dan `detect_fullscreen_state` (`(exclusive, windowed)`).
+  - Menyatukan `installed_fonts` (`Option<Vec<InstalledFont>>`) dan `applied_font_name` pada `StandaloneSettingsApp`, mengembalikan `TextAlign`, `PillLyricTransition`, `allow_close` pada `IslandApp::ui` (mencegah deadlock `CancelClose` saat `--ui` menutup diri), serta menghapus kode duplikat hasil merge di `src/ui/mod.rs` & `src/main.rs`.
+- `src/platform/wayland_layer.rs`, `src/platform/linux.rs`: Memperbaiki crash dan bug Dynamic Island menghilang pada **Linux Hyprland** sementara ikon tray masih hidup:
+  - Mengganti `glutin`/`glow`/`egui_glow` dengan `smithay-client-toolkit` `wl_shm` (`SlotPool` `Argb8888`) + `SoftCanvas`, sehingga kegagalan EGL/NVIDIA `egl-wayland` dan error `wl_surface::invalid_size` akibat commit `set_buffer_scale` sebelum buffer baru hilang total.
+  - Menambahkan pemulihan `LayerSurface` otomatis (`WaylandState::create_layer_surface` dengan backoff dan `new_output` wake) ketika compositor mengirim `ZwlrLayerSurfaceV1::Closed` (mis. DPMS sleep, monitor hotplug, atau `hyprctl reload`) alih-alih jatuh ke fallback `eframe` `xdg_toplevel`.
+  - Memasang `platform::spawn_fullscreen_watcher` serta `ui::apply_configured_fonts` agar fitur auto-hide fullscreen dan font pilihan ikut berjalan penuh di Wayland.
+
 ### Changed
 
 - `Cargo.toml`, `src/clock.rs`, `src/calendar.rs`: Memindahkan `chrono-tz` ke fitur opsional `tz-iana` (nonaktif secara default) dan mengganti jalur default dengan pemetaan `chrono::FixedOffset` (`resolve_fixed_timezone`) untuk zona waktu tetap serta fallback `Local` pada parser `.ics`.
 - `Cargo.toml`: Memisahkan fitur `eframe` (`x11`, `wayland`) dan `tray-icon` (`ksni`) ke `[target.'cfg(target_os = "linux")'.dependencies]` agar build Windows hanya mengkompilasi dependensi Windows, serta mengoptimalkan `[profile.release]` (`opt-level = "z"`, `lto = "fat"`, `strip = "symbols"`).
 - `src/main.rs`: Mengatur `eframe::NativeOptions` (`multisampling: 0`, `persist_window: false`, `depth_buffer: 0`, `stencil_buffer: 0`) untuk menekan alokasi framebuffer GPU/OpenGL.
 - `src/ui/mod.rs`: Membebaskan texture sementara (`album_art_tex`, `gradient_tex`, `gradient_key`) saat overlay tersembunyi, menambahkan early-return pada `render_island_ui` ketika `vis <= 0.005` dan Settings tidak terbuka, serta memperlambat interval repaint idle menjadi `200 ms` (`500 ms` saat hovered) tanpa mengganggu deteksi hover `WS_EX_TRANSPARENT`.
+- `Cargo.toml`, `Cargo.lock`, `src/platform/{linux,mod,windows}.rs`, `src/ui/{mod,settings}.rs`: Mengoptimalkan penggunaan RAM & D-Bus di Linux maupun Windows:
+  - Menghapus dependensi langsung Linux `glutin`, `egui_glow`, `glow`, dan `raw-window-handle`; binary `--release` (`17 MB`) kini bebas link langsung `libGL`/`libEGL` (`ldd` hanya `libc`/`libm`/`libgcc_s`).
+  - Memangkas font eager Linux ke sans + mono (`linux_sans`, `linux_mono`), memuat tepat satu face TTC per `CjkScript` (`[0]` untuk Han/JP, `[1]` untuk Korea), serta meniadakan muatan eager `seguisym.ttf` di Windows dan melepaskan `album_art_tex`/`gradient_tex`/`installed_fonts` ketika musik berhenti / Settings ditutup.
+  - Menggunakan ulang proxy D-Bus MPRIS dengan `zbus::proxy::Builder` + `CacheProperties::No` di `spawn_media_listener` dan memanjangkan jeda poll saat pause/tanpa player (`900 ms`/`1200 ms`).
+  - Terverifikasi dengan `cargo test` (`48 passed; 0 failed`), `cargo clippy --all-targets -- -D warnings`, headless daemon Linux (`VmRSS: 11.2 MB`, `Pss: 8.5 MB`, `RssAnon: 2.0 MB`), dan packaging Linux (`dist/Liebert_Dynamic_Island-0.1.0-x86_64.AppImage` `7.0 MB` + `.tar.gz` `6.7 MB`). Lihat [[00 - Dashboard Proyek]], [[01 - Arsitektur & Spesifikasi]], dan [[03 - Catatan Rapat & Keputusan]].
+
+### Changed
+
+- `src/main.rs`, `src/daemon.rs`, `src/ipc.rs`, `src/ui/mod.rs`, `src/platform/{mod,windows}.rs`, `src/platform/wayland_layer.rs`, `src/state.rs`, `src/lyrics.rs`, `src/calendar.rs`, `src/pomodoro.rs`: Merefaktor arsitektur menjadi **Daemon + UI On-Demand** — proses utama kini berjalan sebagai daemon headless ringan (`src/daemon.rs`, hanya `TrayController`, listener OS, worker lirik/kalender, `PomodoroTimer`, dan server IPC TCP loopback `127.0.0.1:0` di `src/ipc.rs`) tanpa memuat `eframe`/OpenGL saat idle/tersembunyi. Proses `--ui --ipc-addr <addr>` hanya di-spawn saat dibutuhkan (notifikasi masuk, hover area atas layar, menu tray Settings/Test, atau `auto_hide_when_idle = false`), dan otomatis keluar setelah 1,5 detik tersembunyi untuk membebaskan RAM GPU/OpenGL sepenuhnya.
 - `README.md`, `assets/*`: Memperbarui dokumentasi fitur dan menyematkan seluruh galeri preview UI terbaru (`ui-notch-clock.png`, `ui-island-clock.png`, `ui-notch-music.png`, `ui-island-music.png`, `ui-home.jpg` [diperbarui], `ui-music-lyrics.jpg`, `ui-todo.jpg`, `ui-calendar.jpg`, `ui-timer.jpg`, `ui-settings.png`).
 - `src/ui/mod.rs`, `src/ui/settings.rs`: Mengoptimalkan frame pacing dan alokasi memori UI — menaikkan refresh karaoke lirik ke `16 ms` (~60 FPS) dan visualizer idle ke `33 ms` (~30 FPS) saat terlihat, menurunkan repaint saat overlay tersembunyi ke `250 ms`, serta menghindari kloning ulang `installed_fonts` dan `calendar_events` setiap frame pada `DeferredSettingsState`.
+### Fixed
+- `src/ui/settings.rs`, `src/platform/mod.rs`: Memperbaiki kegagalan `clippy` khusus target Windows yang menggagalkan job CI `Build Windows (zip + NSIS installer)`: import `PathBuf` untuk `run_standalone_settings` kini hanya dikompilasi di Linux, varian `FontFamilyTarget` dan field `HoverPollInput::animating` yang memang tidak dipakai di Windows diberi `#[cfg_attr(windows, allow(dead_code))]`, dan `apply_overlay_window_setup` memakai blok ekspresi `#[cfg]` tanpa `return` yang berlebih. `cargo test` (41 passed), `cargo clippy --all-targets -- -D warnings`, serta cross-check `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` semuanya bersih. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+
+### Added
+- `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambahkan preferensi **`TextAlign`** (`Left` / `Center` / `Right`, default `Left`) dengan tombol pilihan **Text Alignment** di tab **Appearance** Settings. Alignment diterapkan pada lirik idle/kartu musik (termasuk karaoke, romaji, dan terjemahan yang digambar manual), judul/body notifikasi compact & expanded, judul/artis lagu, clock/minimal dot, serta daftar todo/kalendar. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+- `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `installer/windows/installer.nsi`, `assets/`, `scripts/build-linux-release.sh`: Menambahkan paket AUR (build dari tag `v0.1.0`, pasang binary + `.desktop` + ikon), installer NSIS Windows (shortcut Start Menu & uninstaller), aset desktop/icon bersama, dan skrip kemasan Linux yang menghasilkan `.tar.gz` alongside AppImage. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-017).
+
+### Fixed
+- `src/ui/mod.rs`, `src/platform/wayland_layer.rs`: Memperbaiki bug Linux yang membuat aplikasi terasa selalu **force-close**:
+  - Root viewport kini membatalkan `close_requested()` dari window manager (`ViewportCommand::CancelClose`); keluar hanya lewat menu **Exit** di tray (`TrayAction::Exit` → `ViewportCommand::Close` di mode eframe, `want_exit` di layer-shell).
+  - Saat auto-hide/fullscreen di Linux, jendela tidak lagi disembunyikan (`Visible(false)`) melainkan dikecilkan ke `1×1` seperti layer-shell, sehingga proses tetap hidup dan bisa muncul kembali lewat hover.
+  - Compositor yang menutup `wl_surface` layer-shell kini memicu **fallback eframe** (`Err` → `main.rs`) alih-alih dianggap sukses dan menghentikan proses. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-016).
+- `src/platform/wayland_layer.rs`: Mengatasi kebocoran tekstur GPU dengan selalu meneruskan `textures_delta` ke `painter.paint_and_update_textures` walau pill sedang tersembunyi (sebelumnya delta `free` dibuang, sehingga tekstur GL tidak pernah dilepaskan sampai proses mati). Loop Wayland juga kini melewati tessellation/GL saat tidak ada redraw/animasi.
+- `src/state.rs`, `src/lyrics.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Membatasi pertumbuhan RAM jangka panjang: antrean notifikasi dibatasi 32 item (FIFO, `MAX_QUEUED_NOTIFICATIONS`), cache lirik mentah/enriched memakai `BoundedCache` (32/64 entri, kunci tanpa `duration_secs` yang sering berubah), key alert kalender dipangkas ke 1 hari, gradient texture cache dikuantisasi, dan pemindaian font hanya dilakukan sekali (sentinel `Option`) agar tidak mengulang walk direktori tiap frame.
+
+### Changed
+- `docs/02 - Daftar Tugas & Backlog.md`, `docs/00 - Dashboard Proyek.md`, `docs/01 - Arsitektur & Spesifikasi.md`, `docs/03 - Catatan Rapat & Keputusan.md`: Mencatat fitur alignment, perbaikan daur hidup Linux, dan pembatasan cache. `cargo test` 41 passed & `cargo clippy --all-targets -- -D warnings` bersih.
+- `.github/workflows/release.yml`, `scripts/build-appimage.sh`, `README.md`: Job Linux kini memakai `build-linux-release.sh` (AppImage + tar.gz), job Windows memasang NSIS dan menghasilkan `*-setup.exe` di samping `.zip`, serta release mencakup bundel AUR. Tabel instalasi prebuilt dan opsi `text_align` ditambahkan ke README. AppImage & tar.gz dibangun dan diverifikasi lokal; installer Windows dibangun oleh CI.
+
+### Added
+- `LICENSE.md`, `Cargo.toml`: Menambahkan berkas lisensi resmi **GNU General Public License v3.0** (`GPL-3.0-or-later`, selaras dengan dependensi `kakasi 0.1`).
+- `src/lyrics.rs`, `src/ui/mod.rs`: Menambahkan animasi transisi **fade-up / fade-down** (`240 ms`, cubic ease-out, terklip di dalam baris pill) saat berganti baris lirik dan terjemahan di pill mode (`IdleDisplayMode::Lyrics`: naik ke atas saat maju ke baris berikutnya dan turun ke bawah saat mundur/seek ke baris sebelumnya) beserta unit test `lyric_transition_fades_up_and_down_and_finishes`.
+- `.github/workflows/release.yml`: Menambahkan workflow CI/CD GitHub Actions untuk membangun dan menerbitkan release Windows (`x86_64-pc-windows-msvc` `.zip`) dan Linux (`AppImage` + `.tar.gz`) saat push tag `v*` atau `workflow_dispatch`.
+
+### Fixed
+- `src/main.rs`, `src/tray.rs`, `src/platform/mod.rs`, `src/platform/linux.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`, `src/ui/icons.rs`: Memperbaiki seluruh error kompilasi, kurung kurawal hilang, dan duplikasi blok hasil merge PR (`#10` & `#12`):
+  - `src/platform/mod.rs`, `src/platform/linux.rs`: Menutup blok `pin_window_top_y` & `list_installed_fonts`, memisahkan `detect_overlay_hover` & `is_cursor_in_top_trigger` dari `is_cursor_over_window`, menghapus referensi `linux::position_overlay_window` yang tidak ada, serta menambahkan `spawn_fullscreen_watcher` di Linux (Hyprland IPC).
+  - `src/main.rs`, `src/tray.rs`: Memulihkan `TrayAction::ToggleDockMode` & `update_dock_mode` di `TrayController`, menyatukan signature `TrayController::new`, membersihkan channel duplikat di `main()`, serta memilih kanvas permanen di Windows (`permanent_canvas_size`) dan ukuran dinamis di Linux.
+  - `src/ui/mod.rs`, `src/ui/icons.rs`: Menutup `apply_configured_fonts`, membersihkan duplikasi kode di `step_logic`, `render_island_ui`, `render_idle`, `render_expanded`, `render_overview_tab`, `render_music_tab`, `render_todo_tab`, `paint_island_surface`, `render_pill_tab`, dan `render_playbar`, menambahkan `IconKind::Timer`, serta menjaga `SETTINGS_WINDOW_TITLE` tersedia di Windows dan Linux.
+  - `src/ui/settings.rs`: Menghapus blok tab duplikat tak tertutup di `render_settings_viewport`, meneruskan `installed_fonts` & `font_search` ke `SettingsBodyState` agar pemilih font juga berfungsi di `run_standalone_settings`, serta meneruskan `self.config.accent_color` ke `apply_settings_theme`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
+
+### Changed
+- `src/ui/mod.rs`, `src/platform/wayland_layer.rs`: Mengganti interpolasi ukuran linier-eksponensial dengan fisika pegas harmonik teredam ala Dynamic Island macOS (`step_spring`, 4 sub-langkah per frame, kekakuan/redaman X & Y sedikit bertahap untuk efek elastis saat expand/collapse/reveal serta `notch_morph`, clip rect konten saat pantulan, dan interval repaint `6 ms` pada `wlr-layer-shell`). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]].
 
 ### Added
 

@@ -1,0 +1,25 @@
+# Maintainer: Zahwan316
+pkgname=liebert-dynamic-island
+pkgver=0.1.2
+pkgrel=1
+pkgdesc="Lightweight native Rust Dynamic Island notification overlay"
+arch=('x86_64')
+url="https://github.com/Zahwan316/liebert-dynamic-island"
+license=('GPL3')
+depends=('dbus' 'wayland' 'libxkbcommon' 'libx11' 'mesa' 'hicolor-icon-theme')
+makedepends=('cargo' 'git')
+source=("$pkgname::git+$url.git#tag=v$pkgver")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/$pkgname"
+  cargo build --release --locked
+}
+
+package() {
+  cd "$srcdir/$pkgname"
+  install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+  install -Dm644 LICENSE.md "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
+  install -Dm644 "assets/$pkgname.desktop" "$pkgdir/usr/share/applications/$pkgname.desktop"
+  install -Dm644 "assets/$pkgname.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/$pkgname.png"
+}

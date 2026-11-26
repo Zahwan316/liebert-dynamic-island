@@ -29,10 +29,11 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] Implementasikan interaksi: auto-collapse 5 detik, hover expand & pause timer, serta tombol `Dismiss`
 
 ### Fase 4: Testing & Release
-- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, pomodoro, album accent, fullscreen rect, & text truncation (`cargo test` — 30 tests passed)
+- [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, pomodoro, album accent, fullscreen rect, & text truncation (`cargo test` — 35 tests passed)
 - [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
 - [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms`
 - [x] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux *(README.md diperbarui sesuai kode aktual; smoke test Linux masih pending)*
+- [x] **Paket rilis v0.1.0:** AppImage + tar.gz Linux dibangun lokal; `PKGBUILD`/`.SRCINFO` AUR, skrip NSIS Windows, dan workflow GitHub Actions disiapkan untuk publikasi aset saat tag `v*` (installer Windows dibangun di CI; submit AUR masih membutuhkan akun maintainer)
 
 ## Fitur Tambahan & Ekspansi (Di Luar Scope Awal P0)
 - [x] **Music & Synced Lyrics:** Pembaca media SMTC (Windows) & MPRIS2 (Linux) + LRC lyrics via LRCLIB (`src/lyrics.rs`)
@@ -54,6 +55,10 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] **Fullscreen / Game Auto-Hide:** Sembunyikan pill otomatis saat aplikasi/game/video fullscreen aktif di monitor utama (Windows; toggle di Settings)
 - [x] **Quick Timer / Pomodoro:** Countdown fokus langsung di pill idle, tab `⏱ Timer`, notifikasi selesai fase, & pengaturan durasi (`src/pomodoro.rs`)
 - [x] **Device Font Picker & Karaoke Translate Mode:** Pilihan font terinstal perangkat di Settings (`list_installed_fonts`, `apply_configured_fonts`), opsi `KaraokeLyricMode::Translate`, serta perbaikan windowed-fullscreen + timer `auto_hide_delay_secs` pasca-fullscreen
+- [x] **Text Alignment & Stabilitas Memori/Daur Hidup:** Tombol `Left` / `Center` / `Right` di Settings (diterapkan ke lirik, notifikasi, judul lagu, clock, todo, kalendar), root viewport Linux tidak lagi ikut tertutup saat WM mengirim close, layer-shell closed → fallback eframe, tekstur GPU selalu di-drain, antrean notifikasi/cache lirik/alert kalender dibatasi (`cargo test` 41 passed, clippy bersih)
+- [x] **Resolusi Merge Conflict, CPU Rasterizer (`SoftCanvas`), Fix Hyprland `wl_shm`, & Win32 Layered Overlay:** Seluruh error merge PR #15 selesai; overlay utama Linux Wayland memakai `wl_shm` (`SlotPool`) + `SoftCanvas` + pemulihan `LayerSurface` otomatis pasca `closed`/hotplug + `spawn_fullscreen_watcher`; Windows memakai `UpdateLayeredWindow` + DIB (`src/platform/windows_overlay.rs`) + `--settings --ipc-addr` terpisah tanpa memuat OpenGL pada proses overlay utama; font & proxy MPRIS `CacheProperties::No` dioptimalkan (`cargo test` 48 passed, `cargo clippy` bersih, AppImage `7.0 MB` terbangun lokal, `Pss` daemon Linux `8.5 MB`)
+- [x] **Fix Fetch Lirik & Sync MPRIS2 Linux + Rilis v0.1.1:** Pemilihan pemutar MPRIS aktif, pembacaan `Position`/`mpris:length` fleksibel (`i64`/`u64`/`f64`) & `xesam:artist` tunggal/array via `Properties.Get`, seeking `SetPosition`, kalibrasi drift & cover-art latency, normalisasi judul/artis LRCLIB multi-kandidat, tombol **Retry Fetch**, serta pembaruan versi & kemasan Linux `v0.1.1` (`cargo test` 53 passed, clippy bersih)
+- [x] **Fix Album Cover Linux + Aturan Rilis v0.1.2:** Perbaikan cache cover tertunda `ArtCacheState`, dekoder `data:image/...;base64,...`, dukungan `file://localhost/` + path polos + `bmp`/`gif`, fallback URL Spotify, pembaruan tekstur cover di `sync_album_art_texture`, pencatatan alur rilis di `AGENTS.md`, serta pembaruan versi ke `v0.1.2` (`cargo test` 54 passed, AppImage terbangun)
 - [ ] **Launch at Startup & Multi-Monitor Picker:** Toggle autostart OS dan pilihan monitor target di Settings
 - [ ] **System HUD (Volume & Brightness):** Bar indikator custom saat volume atau brightness berubah
 - [ ] **Click-to-Focus App:** Klik notifikasi untuk memfokuskan aplikasi pengirimnya

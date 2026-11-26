@@ -1,0 +1,19 @@
+pkgbase = liebert-dynamic-island
+	pkgdesc = Lightweight native Rust Dynamic Island notification overlay
+	pkgver = 0.1.2
+	pkgrel = 1
+	url = https://github.com/Zahwan316/liebert-dynamic-island
+	arch = x86_64
+	license = GPL3
+	makedepends = cargo
+	makedepends = git
+	depends = dbus
+	depends = wayland
+	depends = libxkbcommon
+	depends = libx11
+	depends = mesa
+	depends = hicolor-icon-theme
+	source = liebert-dynamic-island::git+https://github.com/Zahwan316/liebert-dynamic-island.git#tag=v0.1.2
+	sha256sums = SKIP
+
+pkgname = liebert-dynamic-island

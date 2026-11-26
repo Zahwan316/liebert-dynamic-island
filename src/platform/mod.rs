@@ -1,11 +1,13 @@
 use std::sync::{Arc, mpsc};
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 use crate::calendar::CalendarEvent;
 use crate::lyrics::LyricsData;
 use crate::state::{ListenerStatus, NotificationItem};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum RepeatMode {
     #[default]
     Off,
@@ -113,7 +115,7 @@ pub fn extract_dominant_accent(rgba: &[u8]) -> Option<[u8; 3]> {
     Some([r.round() as u8, g.round() as u8, b.round() as u8])
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaCommand {
     TogglePlayPause,
     Next,
@@ -141,7 +143,9 @@ pub enum PlatformEvent {
 #[allow(dead_code)] // Variants used across Linux/Windows font specs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontFamilyTarget {
+    #[cfg_attr(windows, allow(dead_code))]
     Proportional,
+    #[cfg_attr(windows, allow(dead_code))]
     Monospace,
     Both,
 }
@@ -171,6 +175,9 @@ pub struct HoverPollInput<'a> {
 
 #[cfg(windows)]
 mod windows;
+
+#[cfg(windows)]
+pub mod windows_overlay;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -216,7 +223,10 @@ pub fn spawn_fullscreen_watcher(
     #[cfg(windows)]
     windows::spawn_fullscreen_watcher(tx, on_wake);
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    linux::spawn_fullscreen_watcher(tx, on_wake);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = (tx, on_wake);
 }
 
@@ -278,7 +288,9 @@ pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     }
 
     #[cfg(target_os = "linux")]
-    return linux::apply_no_activate_hook(window_title);
+    {
+        linux::apply_no_activate_hook(window_title)
+    }
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {
@@ -287,20 +299,7 @@ pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     }
 }
 
-pub fn position_overlay_window(
-    window_title: &str,
-    x_logical: f32,
-    y_logical: f32,
-    w_logical: f32,
-    h_logical: f32,
-) {
-    #[cfg(target_os = "linux")]
-    linux::position_overlay_window(window_title, x_logical, y_logical, w_logical, h_logical);
-
-    #[cfg(not(target_os = "linux"))]
-    let _ = (window_title, x_logical, y_logical, w_logical, h_logical);
-}
-
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
     #[cfg(windows)]
     {
@@ -315,7 +314,8 @@ pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
     }
 }
 
-pub fn set_overlay_click_through(window_title: &str, passthrough: bool) -> bool {
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
     #[cfg(windows)]
     return windows::set_overlay_click_through(window_title, passthrough);
 
@@ -334,6 +334,7 @@ pub fn set_overlay_hitbox(left_px: i32, top_px: i32, right_px: i32, bottom_px: i
     let _ = (left_px, top_px, right_px, bottom_px);
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
     #[cfg(windows)]
     windows::pin_window_top_y(window_title, target_y_px);
@@ -375,6 +376,7 @@ pub fn sync_overlay_window(
     let _ = (window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn is_cursor_in_screen_rect(
     left_px: i32,
     top_px: i32,
@@ -391,6 +393,7 @@ pub fn is_cursor_in_screen_rect(
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn is_cursor_in_top_trigger(
     top_offset_px: f32,
     trigger_width_px: f32,
@@ -409,6 +412,13 @@ pub fn is_cursor_in_top_trigger(
     }
 }
 
+/// Dispatches pending OS window/tray messages on the current thread (needed by Windows headless daemon).
+pub fn pump_os_events() {
+    #[cfg(windows)]
+    windows::pump_os_events();
+}
+
+#[cfg_attr(windows, allow(dead_code))]
 pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
     #[cfg(windows)]
     return windows::detect_overlay_hover(input);
@@ -530,10 +540,7 @@ pub fn cjk_fallback_fonts_for(script: CjkScript) -> Vec<FontFileSpec> {
     return windows::cjk_fallback_fonts_for(script);
 
     #[cfg(target_os = "linux")]
-    {
-        let _ = script;
-        linux::cjk_fallback_fonts()
-    }
+    return linux::cjk_fallback_fonts_for(script);
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {

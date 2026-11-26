@@ -7,11 +7,12 @@ use std::time::Duration;
 use chrono::{DateTime, Datelike, Days, Local, Months, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Weekday};
 #[cfg(feature = "tz-iana")]
 use chrono_tz::Tz;
+use serde::{Deserialize, Serialize};
 use ureq::Agent;
 
 use crate::platform::PlatformEvent;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CalendarEvent {
     pub summary: String,
     pub start_utc: i64,
@@ -19,6 +20,7 @@ pub struct CalendarEvent {
     pub location: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CalendarCommand {
     SetUrl(String),
     Refresh,

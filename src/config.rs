@@ -46,6 +46,24 @@ impl KaraokeLyricMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+impl TextAlign {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Center => "Center",
+            Self::Right => "Right",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
@@ -69,6 +87,7 @@ pub struct Config {
     pub border_alpha: u8,
     pub corner_radius: u8,
     pub font_name: String,
+    pub text_align: TextAlign,
     pub show_notifications: bool,
     pub show_lyrics: bool,
     pub dynamic_album_color: bool,
@@ -112,6 +131,7 @@ impl Default for Config {
             border_alpha: 36,
             corner_radius: 22,
             font_name: String::new(),
+            text_align: TextAlign::Left,
             show_notifications: true,
             show_lyrics: true,
             dynamic_album_color: true,
@@ -236,6 +256,7 @@ mod tests {
         );
         assert!(cfg.karaoke_lyrics && cfg.romaji_lyrics && cfg.translate_lyrics);
         assert_eq!(cfg.karaoke_lyric_mode, KaraokeLyricMode::Original);
+        assert_eq!(cfg.text_align, TextAlign::Left);
         assert_eq!(cfg.lyric_translate_lang, "id");
         assert_eq!(cfg.lyric_offset_ms, 0);
     }
@@ -252,6 +273,7 @@ mod tests {
             show_pill_translation: false,
             karaoke_lyrics: false,
             karaoke_lyric_mode: KaraokeLyricMode::Romaji,
+            text_align: TextAlign::Right,
             romaji_lyrics: false,
             translate_lyrics: true,
             lyric_translate_lang: "en".to_owned(),
@@ -281,6 +303,7 @@ mod tests {
         assert_eq!(parsed.top_offset_px, 18.0);
         assert_eq!(parsed.collapse_timeout_secs, 7);
         assert_eq!(parsed.scale, 1.0);
+        assert_eq!(parsed.text_align, TextAlign::Left);
         assert_eq!(parsed.bg_color, Config::default().bg_color);
     }
 
