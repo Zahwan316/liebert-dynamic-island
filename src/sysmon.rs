@@ -18,6 +18,7 @@ pub struct SystemMetrics {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub enum SysmonCommand {
     SetConfig {
         enabled: bool,
@@ -299,6 +300,7 @@ mod imp {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 mod imp {
     use super::SystemMetrics;
     use crate::battery::read_battery;
@@ -317,6 +319,7 @@ mod imp {
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn spawn_sysmon_worker(
     cmd_rx: mpsc::Receiver<SysmonCommand>,
     initial_enabled: bool,

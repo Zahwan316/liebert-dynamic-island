@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub enum BatteryStatus {
     Charging,
     Discharging,
@@ -101,9 +102,7 @@ impl BatteryAlertTracker {
         warn_pct: u8,
         crit_pct: u8,
     ) -> Option<(&'static str, String)> {
-        let Some(bat) = info else {
-            return None;
-        };
+        let bat = info?;
         if bat.status != BatteryStatus::Discharging || bat.percent > warn_pct.saturating_add(2) {
             self.warned = false;
             self.critical_warned = false;

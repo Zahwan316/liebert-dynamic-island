@@ -568,20 +568,45 @@ pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
     }]
 }
 
+pub fn bold_fallback_fonts() -> Vec<FontFileSpec> {
+    vec![
+        FontFileSpec {
+            name: "win_segoe_ui_bold".to_owned(),
+            path: "C:\\Windows\\Fonts\\segoeuib.ttf".to_owned(),
+            family: FontFamilyTarget::Bold,
+            face_indices: &[0],
+        },
+        FontFileSpec {
+            name: "win_arial_bold".to_owned(),
+            path: "C:\\Windows\\Fonts\\arialbd.ttf".to_owned(),
+            family: FontFamilyTarget::Bold,
+            face_indices: &[0],
+        },
+    ]
+}
+
 pub fn cjk_fallback_fonts_for(script: super::CjkScript) -> Vec<FontFileSpec> {
     match script {
         super::CjkScript::JapaneseOrHan => vec![FontFileSpec {
             name: "win_msgothic".to_owned(),
             path: "C:\\Windows\\Fonts\\msgothic.ttc".to_owned(),
-            family: FontFamilyTarget::Both,
+            family: FontFamilyTarget::All,
             face_indices: &[0],
         }],
-        super::CjkScript::Korean => vec![FontFileSpec {
-            name: "win_malgun".to_owned(),
-            path: "C:\\Windows\\Fonts\\malgun.ttf".to_owned(),
-            family: FontFamilyTarget::Both,
-            face_indices: &[0],
-        }],
+        super::CjkScript::Korean => vec![
+            FontFileSpec {
+                name: "win_malgun_bold".to_owned(),
+                path: "C:\\Windows\\Fonts\\malgunbd.ttf".to_owned(),
+                family: FontFamilyTarget::Bold,
+                face_indices: &[0],
+            },
+            FontFileSpec {
+                name: "win_malgun".to_owned(),
+                path: "C:\\Windows\\Fonts\\malgun.ttf".to_owned(),
+                family: FontFamilyTarget::All,
+                face_indices: &[0],
+            },
+        ],
     }
 }
 

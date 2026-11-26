@@ -8,6 +8,25 @@ tags:
 
 # 04 - Changelog & Dev Log
 
+## 2026-11-27
+
+### Added
+
+- `src/platform/{mod,linux,windows}.rs`, `src/ui/mod.rs`: Menambahkan dukungan huruf **Bold** untuk lirik utama dan daftar lirik lengkap dengan efek blur di mode expanded (**v0.1.3**):
+  - Menambahkan keluarga font khusus `LyricsBold` (`apply_configured_fonts`, `platform::bold_fallback_fonts`) dengan penemuan otomatis varian Bold font sistem (`NotoSans-Bold.ttf`/`DejaVuSans-Bold.ttf`/`fc-match sans-serif:bold` di Linux; `segoeuib.ttf`/`arialbd.ttf` + `malgunbd.ttf` di Windows) serta fallback CJK `FontFamilyTarget::All` (`Bold` + `Proportional` + `Monospace`) agar lirik utama di pill maupun kartu Music selalu tampil tebal lintas aksara.
+  - Memperbarui kolom kanan `render_music_tab` di mode **Expanded** agar otomatis memicu fetch lirik lagu berjalan (`ensure_lyrics_requested_for_media`), menampilkan **seluruh baris lirik** (`LyricsData::Synced` dan `LyricsData::Plain`) dalam `ScrollArea`, melakukan auto-scroll halus baris aktif ke tengah viewport, serta merender baris **sebelum dan sesudah** baris aktif dengan blur isotropik multi-pass + peluruhan opasitas berbasis jarak (`render_blurred_aligned_text`) yang identik pada `SoftCanvas` (Windows/Wayland) dan OpenGL.
+
+### Fixed
+
+- `src/ui/mod.rs`, `src/battery.rs`, `src/sysmon.rs`, `src/ui/taskbar.rs`, `src/platform/mod.rs`: Memperbaiki tampilan **Idle Clock** dan perataan **`TextAlign::Center`** pada Linux/Windows (**v0.1.3**):
+  - Mengganti kalkulasi lebar jam tetap di `target_size` dengan pengukuran lebar aktual `LayoutJob` (`render_island_ui` + estimator awal `estimate_clock_pill_width` dengan digit stabil `stabilized_clock_measure_text`), sehingga lebar pill otomatis menyesuaikan format `12h`/`24h`, detik, dan zona waktu, sementara konten `[dot + jam + tz]` dipusatkan presisi via `render_dot_label(..., Align::Center)` dan monitor width `eframe` membaca `viewport().monitor_size`.
+  - Memperbaiki penerapan **`TextAlign::Center`** (serta `Left`/`Right`) di pill mode (`IdleDisplayMode::Lyrics` karaoke & fallback non-karaoke + terjemahan, `NextEvent`, `Minimal`, `render_compact` badge+judul+body) dan mode expanded (`render_expanded` notifikasi multi-baris, `render_overview_tab`, `render_todo_tab`, `render_calendar_tab`, `render_music_tab`, dan `render_wrapped_karaoke` via `LayoutJob::halign` + `galley_draw_pos` beserta 3 unit test baru `clock_width_scales_automatically_and_stabilizes_digits`, `galley_draw_pos_centers_single_and_wrapped_lines_in_column`, dan `apply_configured_fonts_registers_bold_lyrics_family_and_line_resolution`).
+  - Memperbaiki warning `clippy` Linux (`question_mark`, `UiControlEvent::ConfigUpdated(Box<Config>)`, dan `#[cfg_attr(not(windows), allow(dead_code))]` pada kode khusus Windows).
+
+### Changed
+
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `src/ui/mod.rs`, `README.md`: Menaikkan versi rilis menjadi **`0.1.3`** dan membangun ulang paket Linux (`AppImage` & `.tar.gz`). Lihat [[00 - Dashboard Proyek]], [[01 - Arsitektur & Spesifikasi]], dan [[03 - Catatan Rapat & Keputusan]] (ADR-021).
+
 ## 2026-11-26
 
 ### Fixed

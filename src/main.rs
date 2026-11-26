@@ -228,7 +228,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                             let _ = event_tx.send(PlatformEvent::CalendarUpdated(res));
                         }
                         DaemonToUi::ConfigUpdated(cfg) => {
-                            let _ = ui_ctrl_tx.send(UiControlEvent::ConfigUpdated(cfg));
+                            let _ = ui_ctrl_tx.send(UiControlEvent::ConfigUpdated(Box::new(cfg)));
                         }
                         DaemonToUi::SetPaused(paused) => {
                             let _ = ui_ctrl_tx.send(UiControlEvent::SetPaused(paused));

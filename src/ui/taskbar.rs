@@ -6,6 +6,7 @@ use crate::platform::TaskbarGeometry;
 use crate::sysmon::{SystemMetrics, format_speed_bps};
 
 /// Computes physical `(x, y, width, height)` for the taskbar widget from taskbar & tray bounds.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn compute_taskbar_widget_rect(
     geom: &TaskbarGeometry,
     pos: TaskbarPosition,
@@ -45,6 +46,7 @@ pub fn compute_taskbar_widget_rect(
     (x, y, w, h)
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn estimate_taskbar_size(config: &Config, metrics: &SystemMetrics) -> Vec2 {
     let mut items = 0usize;
     if config.taskbar_show_cpu {
@@ -72,6 +74,7 @@ pub fn estimate_taskbar_size(config: &Config, metrics: &SystemMetrics) -> Vec2 {
     Vec2::new(w, 30.0)
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn render_taskbar_ui(ui: &mut egui::Ui, config: &Config, metrics: &SystemMetrics) {
     let rect = ui.max_rect().shrink2(Vec2::new(2.0, 2.0));
     let bg = Color32::from_rgba_unmultiplied(
@@ -207,6 +210,7 @@ pub fn render_taskbar_ui(ui: &mut egui::Ui, config: &Config, metrics: &SystemMet
     });
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 #[allow(clippy::too_many_arguments)]
 fn draw_metric(
     ui: &mut egui::Ui,

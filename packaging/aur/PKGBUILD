@@ -1,6 +1,6 @@
 # Maintainer: Zahwan316
 pkgname=liebert-dynamic-island
-pkgver=0.1.2
+pkgver=0.1.3
 pkgrel=1
 pkgdesc="Lightweight native Rust Dynamic Island notification overlay"
 arch=('x86_64')

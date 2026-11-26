@@ -138,6 +138,7 @@ pub enum PlatformEvent {
         lyrics: LyricsData,
     },
     CalendarUpdated(Result<Vec<CalendarEvent>, String>),
+    #[cfg_attr(not(windows), allow(dead_code))]
     SystemMetrics(crate::sysmon::SystemMetrics),
 }
 
@@ -151,6 +152,7 @@ pub struct TaskbarGeometry {
     pub dpi_scale: f32,
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn query_taskbar_geometry() -> Option<TaskbarGeometry> {
     #[cfg(windows)]
     return windows::query_taskbar_geometry();
@@ -167,6 +169,8 @@ pub enum FontFamilyTarget {
     #[cfg_attr(windows, allow(dead_code))]
     Monospace,
     Both,
+    Bold,
+    All,
 }
 
 #[derive(Debug, Clone)]
@@ -532,6 +536,17 @@ pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
 
     #[cfg(target_os = "linux")]
     return linux::base_fallback_fonts();
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    Vec::new()
+}
+
+pub fn bold_fallback_fonts() -> Vec<FontFileSpec> {
+    #[cfg(windows)]
+    return windows::bold_fallback_fonts();
+
+    #[cfg(target_os = "linux")]
+    return linux::bold_fallback_fonts();
 
     #[cfg(not(any(windows, target_os = "linux")))]
     Vec::new()
