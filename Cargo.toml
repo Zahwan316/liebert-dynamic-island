@@ -4,21 +4,24 @@ version = "0.1.0"
 edition = "2024"
 description = "Lightweight native Rust Dynamic Island notification overlay for Windows and Linux"
 
+[features]
+tz-iana = ["dep:chrono-tz"]
+
 [dependencies]
-eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "clipboard", "x11", "wayland"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.2"
 directories = "6.0"
-tray-icon = { version = "0.27", default-features = false, features = ["ksni"] }
 ureq = "3.5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 kakasi = "0.1"
 any_ascii = "0.3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-chrono-tz = "0.10"
+chrono-tz = { version = "0.10", optional = true }
 
 [target.'cfg(windows)'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "clipboard"] }
+tray-icon = { version = "0.27", default-features = false }
 windows = { version = "0.62", features = [
     "ApplicationModel",
     "Foundation",
@@ -37,6 +40,8 @@ windows = { version = "0.62", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "clipboard", "x11", "wayland"] }
+tray-icon = { version = "0.27", default-features = false, features = ["ksni"] }
 zbus = "6.5"
 smithay-client-toolkit = { version = "0.19", default-features = false, features = ["calloop"] }
 wayland-client = "0.31"
@@ -48,9 +53,9 @@ calloop = "0.13"
 calloop-wayland-source = "0.3"
 
 [profile.release]
-lto = "thin"
-strip = true
-opt-level = "s"
+lto = "fat"
+strip = "symbols"
+opt-level = "z"
 codegen-units = 1
 panic = "abort"
 

@@ -446,8 +446,9 @@ impl IslandApp {
     }
 
     fn current_lyric_ms(&self, now: Instant) -> u64 {
+        const KARAOKE_SYNC_LEAD_MS: i64 = 250;
         let base = self.current_playback_ms(now) as i64;
-        (base + self.config.lyric_offset_ms).max(0) as u64
+        (base + KARAOKE_SYNC_LEAD_MS + self.config.lyric_offset_ms).max(0) as u64
     }
 
     fn handle_events(&mut self, ctx: &egui::Context, now: Instant) -> (bool, bool) {
@@ -488,7 +489,19 @@ impl IslandApp {
                     self.last_fullscreen_exclusive = exclusive;
                     self.last_fullscreen_windowed = windowed;
                 }
-                PlatformEvent::Media(track) => {
+                PlatformEvent::Media(mut track) => {
+                    if let (Some(prev), Some(next)) = (&self.media, &mut track)
+                        && prev.is_playing
+                        && next.is_playing
+                        && prev.artist == next.artist
+                        && prev.title == next.title
+                    {
+                        let cur_ms = self.current_playback_ms(now);
+                        if next.position_ms.abs_diff(cur_ms) <= 450 {
+                            next.position_ms = prev.position_ms;
+                            next.updated_at = prev.updated_at;
+                        }
+                    }
                     self.media = track;
                     if let Some((artist, title)) = self
                         .media
@@ -686,6 +699,7 @@ impl IslandApp {
         if let Some(prev) = &self.album_art_key
             && prev.0 == track.artist
             && prev.1 == track.title
+            && (track.album_art.is_none() || self.album_art_tex.is_some())
         {
             return;
         }
@@ -868,7 +882,7 @@ impl IslandApp {
             platform::is_cursor_in_top_trigger(top_y, trigger_w, ppp).unwrap_or(false)
         } else {
             let pill_x = ((screen_w - self.current_size.x) * 0.5).max(0.0);
-            let pad = if self.state.hovered { 8.0 } else { 2.0 };
+            let pad = if self.state.hovered { 4.0 } else { 0.0 };
             let win_over = platform::is_cursor_in_screen_rect(
                 ((pill_x - pad) * ppp) as i32,
                 ((top_y - pad) * ppp).max(0.0) as i32,
@@ -913,6 +927,12 @@ impl IslandApp {
         }
         let visible = want_visible || self.visibility_anim > 0.01;
         let became_visible = visible && !self.last_visible;
+        if !visible && !vis_animating {
+            self.album_art_tex = None;
+            self.album_art_key = None;
+            self.gradient_tex = None;
+            self.gradient_key = None;
+        }
         if visible != self.last_visible {
             self.last_visible = visible;
             // On Eframe (Windows/X11), keep the OS window shown and rely on transparent
@@ -968,10 +988,23 @@ impl IslandApp {
             platform::pin_window_top_y(WINDOW_TITLE, 0);
         }
 
+        if want_visible && visible {
+            let pill_x = ((screen_w - self.current_size.x) * 0.5).max(0.0);
+            platform::set_overlay_hitbox(
+                (pill_x * ppp).floor() as i32,
+                (top_y * ppp).floor() as i32,
+                ((pill_x + self.current_size.x) * ppp).ceil() as i32,
+                ((top_y + self.current_size.y) * ppp).ceil() as i32,
+            );
+        } else {
+            platform::set_overlay_hitbox(0, 0, -1, -1);
+        }
+
         let passthrough = !want_visible || !hovered;
-        if self.last_passthrough != Some(passthrough) {
+        if self.last_passthrough != Some(passthrough)
+            && platform::set_overlay_click_through(WINDOW_TITLE, passthrough)
+        {
             self.last_passthrough = Some(passthrough);
-            platform::set_overlay_click_through(WINDOW_TITLE, passthrough);
         }
         let rounded_size = Vec2::new(self.current_size.x.round(), self.current_size.y.round());
         #[cfg(target_os = "linux")]
@@ -1019,7 +1052,9 @@ impl IslandApp {
             Duration::from_millis(16)
         } else if showing_idle_bars {
             Duration::from_millis(33)
-        } else if playing_lyrics || showing_live_seconds || pomodoro_running {
+        } else if playing_lyrics {
+            Duration::from_millis(100)
+        } else if showing_live_seconds || pomodoro_running {
             Duration::from_millis(250)
         } else if let Some(deadline) = self
             .state
@@ -1031,8 +1066,10 @@ impl IslandApp {
                 .min(Duration::from_millis(80))
         } else if let Some(demo_at) = self.demo_deadline {
             demo_at.saturating_duration_since(now)
+        } else if self.state.hovered {
+            Duration::from_millis(500)
         } else {
-            Duration::from_millis(80)
+            Duration::from_millis(200)
         };
 
         if mode == OverlayBackendMode::Eframe {
@@ -1064,6 +1101,11 @@ impl IslandApp {
     }
 
     pub fn render_island_ui(&mut self, ui: &mut egui::Ui, allow_inline_settings: bool) {
+        let vis = self.visibility_anim.clamp(0.0, 1.0);
+        if vis <= 0.005 && !(allow_inline_settings && self.show_settings) {
+            return;
+        }
+
         let ctx = ui.ctx().clone();
         let now = Instant::now();
 

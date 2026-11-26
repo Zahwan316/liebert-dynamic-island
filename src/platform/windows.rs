@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicIsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -35,13 +35,13 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, FindWindowW, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC, GetAncestor,
     GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow, GetShellWindow,
-    GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HWND_NOTOPMOST,
-    HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MONITORINFOF_PRIMARY, SM_CXSCREEN, SW_HIDE,
-    SW_RESTORE,
-    SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_NCCALCSIZE, WNDPROC,
-    WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HTCLIENT,
+    HWND_NOTOPMOST, HWND_TOPMOST, HTTRANSPARENT, IsIconic, IsWindowVisible, IsZoomed,
+    MONITORINFOF_PRIMARY, SM_CXSCREEN, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, WM_NCCALCSIZE, WM_NCHITTEST, WNDPROC, WS_BORDER, WS_CAPTION,
+    WS_DLGFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::HSTRING;
 
@@ -354,7 +354,12 @@ pub fn spawn_media_listener(
                     on_wake();
                 }
 
-                match cmd_rx.recv_timeout(Duration::from_millis(600)) {
+                let poll_ms = if last_snapshot.as_ref().is_some_and(|s| s.is_playing) {
+                    200
+                } else {
+                    600
+                };
+                match cmd_rx.recv_timeout(Duration::from_millis(poll_ms)) {
                     Ok(cmd) => {
                         if let Ok(session) = manager.GetCurrentSession() {
                             match cmd {
@@ -594,6 +599,22 @@ pub fn cjk_fallback_fonts_for(script: super::CjkScript) -> Vec<FontFileSpec> {
 
 static ORIG_WNDPROC: AtomicIsize = AtomicIsize::new(0);
 
+static HITBOX_LEFT: AtomicI32 = AtomicI32::new(0);
+static HITBOX_TOP: AtomicI32 = AtomicI32::new(0);
+static HITBOX_RIGHT: AtomicI32 = AtomicI32::new(-1);
+static HITBOX_BOTTOM: AtomicI32 = AtomicI32::new(-1);
+
+pub fn set_overlay_hitbox(left_px: i32, top_px: i32, right_px: i32, bottom_px: i32) {
+    HITBOX_LEFT.store(left_px, Ordering::Relaxed);
+    HITBOX_TOP.store(top_px, Ordering::Relaxed);
+    HITBOX_RIGHT.store(right_px, Ordering::Relaxed);
+    HITBOX_BOTTOM.store(bottom_px, Ordering::Relaxed);
+}
+
+fn point_in_hitbox(x: i32, y: i32, l: i32, t: i32, r: i32, b: i32) -> bool {
+    x >= l && x <= r && y >= t && y <= b
+}
+
 unsafe extern "system" fn overlay_wndproc(
     hwnd: HWND,
     msg: u32,
@@ -603,6 +624,19 @@ unsafe extern "system" fn overlay_wndproc(
     // Strip the 1px top inset that winit's undecorated-shadow handler adds in WM_NCCALCSIZE.
     if msg == WM_NCCALCSIZE && wparam.0 != 0 {
         return LRESULT(0);
+    }
+    if msg == WM_NCHITTEST {
+        let x = (lparam.0 & 0xFFFF) as i16 as i32;
+        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+        let l = HITBOX_LEFT.load(Ordering::Relaxed);
+        let t = HITBOX_TOP.load(Ordering::Relaxed);
+        let r = HITBOX_RIGHT.load(Ordering::Relaxed);
+        let b = HITBOX_BOTTOM.load(Ordering::Relaxed);
+        return if point_in_hitbox(x, y, l, t, r, b) {
+            LRESULT(HTCLIENT as isize)
+        } else {
+            LRESULT(HTTRANSPARENT as isize)
+        };
     }
     let orig = ORIG_WNDPROC.load(Ordering::Relaxed);
     if orig != 0 {
@@ -731,13 +765,13 @@ pub fn set_overlay_visible(window_title: &str, visible: bool) {
     }
 }
 
-pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
+pub fn set_overlay_click_through(window_title: &str, passthrough: bool) -> bool {
     let title = HSTRING::from(window_title);
     let Ok(hwnd) = (unsafe { FindWindowW(None, &title) }) else {
-        return;
+        return false;
     };
     if hwnd.is_invalid() {
-        return;
+        return false;
     }
     let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
     let base = ex | (WS_EX_NOACTIVATE.0 as isize) | (WS_EX_TOOLWINDOW.0 as isize);
@@ -750,8 +784,18 @@ pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
     if desired != ex {
         unsafe {
             SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desired);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
         }
     }
+    true
 }
 
 pub fn bring_window_to_front(window_title: &str) -> bool {
@@ -1023,5 +1067,13 @@ mod tests {
             classify_fullscreen_rects(rect(100, 100, 900, 700), mon, work_taskbar, true),
             (false, false)
         );
+    }
+
+    #[test]
+    fn point_in_hitbox_checks_bounds_and_empty_rect() {
+        assert!(point_in_hitbox(500, 10, 400, 0, 600, 40));
+        assert!(!point_in_hitbox(399, 10, 400, 0, 600, 40));
+        assert!(!point_in_hitbox(500, 41, 400, 0, 600, 40));
+        assert!(!point_in_hitbox(0, 0, 0, 0, -1, -1));
     }
 }

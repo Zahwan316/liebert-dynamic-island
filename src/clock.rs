@@ -1,4 +1,5 @@
-use chrono::{DateTime, Local, Timelike, Utc};
+use chrono::{DateTime, FixedOffset, Local, Timelike, Utc};
+#[cfg(feature = "tz-iana")]
 use chrono_tz::Tz;
 
 pub const COMMON_TIMEZONES: &[(&str, &str)] = &[
@@ -17,9 +18,36 @@ pub const COMMON_TIMEZONES: &[(&str, &str)] = &[
     ("Australia/Sydney", "AEST — Sydney"),
 ];
 
+pub(crate) fn resolve_fixed_timezone(tz_name: &str) -> Option<(FixedOffset, &'static str)> {
+    const HOUR: i32 = 3600;
+    match tz_name.trim() {
+        "UTC" => Some((FixedOffset::east_opt(0)?, "UTC")),
+        "Asia/Jakarta" => Some((FixedOffset::east_opt(7 * HOUR)?, "WIB")),
+        "Asia/Makassar" => Some((FixedOffset::east_opt(8 * HOUR)?, "WITA")),
+        "Asia/Jayapura" => Some((FixedOffset::east_opt(9 * HOUR)?, "WIT")),
+        "Asia/Singapore" => Some((FixedOffset::east_opt(8 * HOUR)?, "SGT")),
+        "Asia/Tokyo" => Some((FixedOffset::east_opt(9 * HOUR)?, "JST")),
+        "Asia/Seoul" => Some((FixedOffset::east_opt(9 * HOUR)?, "KST")),
+        // shortcut: fixed standard offsets when tz-iana is off, enable --features tz-iana for DST
+        "Europe/London" => Some((FixedOffset::east_opt(0)?, "GMT")),
+        "Europe/Berlin" => Some((FixedOffset::east_opt(HOUR)?, "CET")),
+        "America/New_York" => Some((FixedOffset::east_opt(-5 * HOUR)?, "EST")),
+        "America/Los_Angeles" => Some((FixedOffset::east_opt(-8 * HOUR)?, "PST")),
+        "Australia/Sydney" => Some((FixedOffset::east_opt(10 * HOUR)?, "AEST")),
+        _ => None,
+    }
+}
+
 pub fn is_valid_timezone(tz_name: &str) -> bool {
     let trimmed = tz_name.trim();
-    trimmed.eq_ignore_ascii_case("local") || trimmed.parse::<Tz>().is_ok()
+    if trimmed.eq_ignore_ascii_case("local") || resolve_fixed_timezone(trimmed).is_some() {
+        return true;
+    }
+    #[cfg(feature = "tz-iana")]
+    if trimmed.parse::<Tz>().is_ok() {
+        return true;
+    }
+    false
 }
 
 pub fn format_clock(
@@ -29,13 +57,20 @@ pub fn format_clock(
     show_seconds: bool,
 ) -> (String, String) {
     let trimmed = tz_name.trim();
-    if !trimmed.eq_ignore_ascii_case("local")
-        && let Ok(tz) = trimmed.parse::<Tz>()
-    {
-        let dt = now_utc.with_timezone(&tz);
-        let time_str = format_hms(dt.hour(), dt.minute(), dt.second(), use_24h, show_seconds);
-        let label = dt.format("%Z").to_string();
-        return (time_str, label);
+    if !trimmed.eq_ignore_ascii_case("local") {
+        #[cfg(feature = "tz-iana")]
+        if let Ok(tz) = trimmed.parse::<Tz>() {
+            let dt = now_utc.with_timezone(&tz);
+            let time_str = format_hms(dt.hour(), dt.minute(), dt.second(), use_24h, show_seconds);
+            let label = dt.format("%Z").to_string();
+            return (time_str, label);
+        }
+
+        if let Some((offset, label)) = resolve_fixed_timezone(trimmed) {
+            let dt = now_utc.with_timezone(&offset);
+            let time_str = format_hms(dt.hour(), dt.minute(), dt.second(), use_24h, show_seconds);
+            return (time_str, label.to_owned());
+        }
     }
 
     let dt = now_utc.with_timezone(&Local);

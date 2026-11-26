@@ -12,6 +12,10 @@ tags:
 
 ### Changed
 
+- `Cargo.toml`, `src/clock.rs`, `src/calendar.rs`: Memindahkan `chrono-tz` ke fitur opsional `tz-iana` (nonaktif secara default) dan mengganti jalur default dengan pemetaan `chrono::FixedOffset` (`resolve_fixed_timezone`) untuk zona waktu tetap serta fallback `Local` pada parser `.ics`.
+- `Cargo.toml`: Memisahkan fitur `eframe` (`x11`, `wayland`) dan `tray-icon` (`ksni`) ke `[target.'cfg(target_os = "linux")'.dependencies]` agar build Windows hanya mengkompilasi dependensi Windows, serta mengoptimalkan `[profile.release]` (`opt-level = "z"`, `lto = "fat"`, `strip = "symbols"`).
+- `src/main.rs`: Mengatur `eframe::NativeOptions` (`multisampling: 0`, `persist_window: false`, `depth_buffer: 0`, `stencil_buffer: 0`) untuk menekan alokasi framebuffer GPU/OpenGL.
+- `src/ui/mod.rs`: Membebaskan texture sementara (`album_art_tex`, `gradient_tex`, `gradient_key`) saat overlay tersembunyi, menambahkan early-return pada `render_island_ui` ketika `vis <= 0.005` dan Settings tidak terbuka, serta memperlambat interval repaint idle menjadi `200 ms` (`500 ms` saat hovered) tanpa mengganggu deteksi hover `WS_EX_TRANSPARENT`.
 - `README.md`, `assets/*`: Memperbarui dokumentasi fitur dan menyematkan seluruh galeri preview UI terbaru (`ui-notch-clock.png`, `ui-island-clock.png`, `ui-notch-music.png`, `ui-island-music.png`, `ui-home.jpg` [diperbarui], `ui-music-lyrics.jpg`, `ui-todo.jpg`, `ui-calendar.jpg`, `ui-timer.jpg`, `ui-settings.png`).
 - `src/ui/mod.rs`, `src/ui/settings.rs`: Mengoptimalkan frame pacing dan alokasi memori UI — menaikkan refresh karaoke lirik ke `16 ms` (~60 FPS) dan visualizer idle ke `33 ms` (~30 FPS) saat terlihat, menurunkan repaint saat overlay tersembunyi ke `250 ms`, serta menghindari kloning ulang `installed_fonts` dan `calendar_events` setiap frame pada `DeferredSettingsState`.
 
@@ -27,6 +31,9 @@ tags:
 
 ### Fixed
 
+- `src/ui/mod.rs`: Memperbaiki cover art / album art musik yang kembali ke ikon fallback setelah overlay sempat tersembunyi — ikut mereset `album_art_key` saat `album_art_tex` dibebaskan dan memastikan `sync_album_art_texture` memuat ulang texture bila `album_art_tex` bernilai `None` sementara `track.album_art` tersedia.
+- `src/platform/windows.rs`, `src/platform/mod.rs`, `src/ui/mod.rs`: Memperbaiki hitbox overlay Windows dengan menangani `WM_NCHITTEST` per-piksel (`set_overlay_hitbox`, mengembalikan `HTTRANSPARENT` di luar pill aktif dan `HTCLIENT` di dalam pill), memicu `SWP_FRAMECHANGED` saat `set_overlay_click_through` mengubah `GWL_EXSTYLE`, serta mengetatkan padding deteksi hover.
+- `src/platform/windows.rs`, `src/ui/mod.rs`: Mengurangi delay & jitter sinkronisasi lirik karaoke dengan mempercepat polling SMTC saat memutar lagu menjadi `200 ms`, menambahkan kompensasi latensi `KARAOKE_SYNC_LEAD_MS` (`250 ms`), dan menahan anchor posisi pemutaran saat selisih laporan SMTC `<= 450 ms`.
 - `src/calendar.rs`: Menambahkan ekspansi event berulang (`RRULE` untuk `DAILY`, `WEEKLY` + `BYDAY`, `MONTHLY`, `YEARLY`, `INTERVAL`, `COUNT`, `UNTIL`, `EXDATE`, `RECURRENCE-ID`, serta dukungan `TZID`) pada `parse_ics_in_range` sehingga jadwal mingguan berulang dari Google Calendar ikut tampil, dan membatasi `upcoming_events` ke **minggu berjalan ini saja** (`current_week_end_utc`).
 - `Cargo.toml`, `src/ui/settings.rs`: Mengaktifkan fitur `"clipboard"` pada `eframe` (agar `Ctrl+C`/`Ctrl+V`/`Ctrl+X` di `egui::TextEdit` terhubung ke clipboard OS) serta menambahkan tombol **Copy** pada tab **Google Calendar** di Settings.
 - `src/ui/settings.rs`, `src/ui/mod.rs`: Memperbaiki panic `egui` (`egui backend is implemented incorrectly - the user callback was never called`) dan Dynamic Island yang tidak muncul kembali setelah masuk windowed-fullscreen/auto-hide — mengganti `show_viewport_immediate` Settings menjadi `show_viewport_deferred` dengan state bersama `Arc<Mutex<...>>`, mengeluarkan pemanggilan `render_settings_viewport` dari early-return `vis <= 0.005`, dan menjaga jendela `eframe` tetap aktif (`SW_SHOWNOACTIVATE` + transparan & click-through `WS_EX_TRANSPARENT`) alih-alih `SW_HIDE` yang menekan `WM_PAINT`/`RedrawRequested`.

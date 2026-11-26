@@ -315,12 +315,23 @@ pub fn set_overlay_visible(window_title: &str, visible: bool) -> bool {
     }
 }
 
-pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
+pub fn set_overlay_click_through(window_title: &str, passthrough: bool) -> bool {
     #[cfg(windows)]
-    windows::set_overlay_click_through(window_title, passthrough);
+    return windows::set_overlay_click_through(window_title, passthrough);
 
     #[cfg(not(windows))]
-    let _ = (window_title, passthrough);
+    {
+        let _ = (window_title, passthrough);
+        true
+    }
+}
+
+pub fn set_overlay_hitbox(left_px: i32, top_px: i32, right_px: i32, bottom_px: i32) {
+    #[cfg(windows)]
+    windows::set_overlay_hitbox(left_px, top_px, right_px, bottom_px);
+
+    #[cfg(not(windows))]
+    let _ = (left_px, top_px, right_px, bottom_px);
 }
 
 pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {

@@ -1,9 +1,11 @@
 use std::collections::HashSet;
+#[cfg(feature = "tz-iana")]
 use std::str::FromStr;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use chrono::{DateTime, Datelike, Days, Local, Months, NaiveDate, NaiveDateTime, TimeZone, Weekday};
+use chrono::{DateTime, Datelike, Days, Local, Months, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Weekday};
+#[cfg(feature = "tz-iana")]
 use chrono_tz::Tz;
 use ureq::Agent;
 
@@ -189,24 +191,17 @@ fn expand_rrule(
         return;
     }
 
-    let parsed_tz = ev.tzid.as_deref().and_then(|t| Tz::from_str(t).ok());
+    let tzid = ev.tzid.as_deref();
     let start_local_dt = DateTime::from_timestamp(ev.start_utc, 0)
         .map(|dt| dt.with_timezone(&Local))
         .unwrap_or_else(Local::now);
-    let base_date = parsed_tz
-        .and_then(|tz| DateTime::from_timestamp(ev.start_utc, 0).map(|d| d.with_timezone(&tz).date_naive()))
-        .unwrap_or_else(|| start_local_dt.date_naive());
-    let base_time = parsed_tz
-        .and_then(|tz| DateTime::from_timestamp(ev.start_utc, 0).map(|d| d.with_timezone(&tz).time()))
-        .unwrap_or_else(|| start_local_dt.time());
+    let (base_date, base_time) = utc_to_naive_in_tz(ev.start_utc, tzid)
+        .unwrap_or_else(|| (start_local_dt.date_naive(), start_local_dt.time()));
 
     let to_utc_ts = |date: NaiveDate| -> Option<i64> {
         let ndt = NaiveDateTime::new(date, base_time);
-        if let Some(tz) = parsed_tz {
-            tz.from_local_datetime(&ndt).earliest().map(|d| d.timestamp())
-        } else {
-            Local.from_local_datetime(&ndt).earliest().map(|d| d.timestamp())
-        }
+        local_naive_to_utc(ndt, tzid)
+            .or_else(|| Local.from_local_datetime(&ndt).earliest().map(|d| d.timestamp()))
     };
 
     let mut emitted_count: u32 = 0;
@@ -364,16 +359,42 @@ fn unescape_ics(s: &str) -> String {
         .replace("\\\\", "\\")
 }
 
+fn utc_to_naive_in_tz(ts: i64, tzid: Option<&str>) -> Option<(NaiveDate, NaiveTime)> {
+    let tz_name = tzid?;
+    let dt = DateTime::from_timestamp(ts, 0)?;
+    #[cfg(feature = "tz-iana")]
+    if let Ok(tz) = Tz::from_str(tz_name) {
+        let zdt = dt.with_timezone(&tz);
+        return Some((zdt.date_naive(), zdt.time()));
+    }
+    let (offset, _) = crate::clock::resolve_fixed_timezone(tz_name)?;
+    let zdt = dt.with_timezone(&offset);
+    Some((zdt.date_naive(), zdt.time()))
+}
+
+fn local_naive_to_utc(ndt: NaiveDateTime, tzid: Option<&str>) -> Option<i64> {
+    let tz_name = tzid?;
+    #[cfg(feature = "tz-iana")]
+    if let Ok(tz) = Tz::from_str(tz_name)
+        && let Some(dt) = tz.from_local_datetime(&ndt).earliest()
+    {
+        return Some(dt.timestamp());
+    }
+    if let Some((offset, _)) = crate::clock::resolve_fixed_timezone(tz_name)
+        && let Some(dt) = offset.from_local_datetime(&ndt).earliest()
+    {
+        return Some(dt.timestamp());
+    }
+    None
+}
+
 fn parse_ics_datetime(val: &str, tzid: Option<&str>) -> Option<i64> {
     if let Ok(ndt) = NaiveDateTime::parse_from_str(val, "%Y%m%dT%H%M%SZ") {
         return Some(ndt.and_utc().timestamp());
     }
     if let Ok(ndt) = NaiveDateTime::parse_from_str(val, "%Y%m%dT%H%M%S") {
-        if let Some(tz_name) = tzid
-            && let Ok(tz) = Tz::from_str(tz_name)
-            && let Some(dt) = tz.from_local_datetime(&ndt).earliest()
-        {
-            return Some(dt.timestamp());
+        if let Some(ts) = local_naive_to_utc(ndt, tzid) {
+            return Some(ts);
         }
         let local_ts = Local
             .from_local_datetime(&ndt)

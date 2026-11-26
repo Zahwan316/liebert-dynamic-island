@@ -127,6 +127,10 @@ fn run_eframe_overlay(
 
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Glow,
+        multisampling: 0,
+        persist_window: false,
+        depth_buffer: 0,
+        stencil_buffer: 0,
         viewport: egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)
             .with_app_id("liebert-dynamic-island")
