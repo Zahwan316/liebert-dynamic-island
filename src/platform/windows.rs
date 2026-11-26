@@ -25,7 +25,8 @@ use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromWindow,
+    GetDC, GetDeviceCaps, GetMonitorInfoW, LOGPIXELSX, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+    MonitorFromWindow, ReleaseDC,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
 use windows::Win32::UI::Shell::{
@@ -33,8 +34,8 @@ use windows::Win32::UI::Shell::{
     SHQueryUserNotificationState,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallWindowProcW, DispatchMessageW, FindWindowW, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC,
-    GetAncestor, GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow,
+    CallWindowProcW, DispatchMessageW, FindWindowExW, FindWindowW, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
+    GWLP_WNDPROC, GetAncestor, GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow,
     GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
     HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MONITORINFOF_PRIMARY, MSG,
     PM_REMOVE, PeekMessageW, SM_CXSCREEN, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE,
@@ -777,6 +778,43 @@ pub fn bring_window_to_front(window_title: &str) -> bool {
         let _ = SetForegroundWindow(hwnd);
     }
     true
+}
+
+pub fn query_taskbar_geometry() -> Option<crate::platform::TaskbarGeometry> {
+    use windows::core::w;
+    let tray_hwnd = unsafe { FindWindowW(w!("Shell_TrayWnd"), None) }.ok()?;
+    if tray_hwnd.is_invalid() {
+        return None;
+    }
+    let mut tb_rect = RECT::default();
+    unsafe { GetWindowRect(tray_hwnd, &mut tb_rect) }.ok()?;
+
+    let tray_left = unsafe { FindWindowExW(Some(tray_hwnd), None, w!("TrayNotifyWnd"), None) }
+        .ok()
+        .filter(|h| !h.is_invalid())
+        .and_then(|notify| {
+            let mut r = RECT::default();
+            unsafe { GetWindowRect(notify, &mut r) }.ok()?;
+            Some(r.left)
+        });
+
+    let hdc = unsafe { GetDC(Some(tray_hwnd)) };
+    let dpi_scale = if !hdc.is_invalid() {
+        let dpi = unsafe { GetDeviceCaps(Some(hdc), LOGPIXELSX) };
+        unsafe { ReleaseDC(Some(tray_hwnd), hdc) };
+        if dpi > 0 { dpi as f32 / 96.0 } else { 1.0 }
+    } else {
+        1.0
+    };
+
+    Some(crate::platform::TaskbarGeometry {
+        left: tb_rect.left,
+        top: tb_rect.top,
+        right: tb_rect.right,
+        bottom: tb_rect.bottom,
+        tray_left,
+        dpi_scale: dpi_scale.max(1.0),
+    })
 }
 
 pub fn is_cursor_in_screen_rect(

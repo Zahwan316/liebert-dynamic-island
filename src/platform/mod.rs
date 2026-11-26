@@ -138,6 +138,25 @@ pub enum PlatformEvent {
         lyrics: LyricsData,
     },
     CalendarUpdated(Result<Vec<CalendarEvent>, String>),
+    SystemMetrics(crate::sysmon::SystemMetrics),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TaskbarGeometry {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub tray_left: Option<i32>,
+    pub dpi_scale: f32,
+}
+
+pub fn query_taskbar_geometry() -> Option<TaskbarGeometry> {
+    #[cfg(windows)]
+    return windows::query_taskbar_geometry();
+
+    #[cfg(not(windows))]
+    None
 }
 
 #[allow(dead_code)] // Variants used across Linux/Windows font specs.

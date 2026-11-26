@@ -401,6 +401,7 @@ pub fn run_daemon(demo_mode: bool) -> ExitCode {
                     }
                     daemon.send_to_ui(&DaemonToUi::CalendarUpdated(res));
                 }
+                PlatformEvent::SystemMetrics(_) => {}
             }
         }
 

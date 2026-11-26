@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod battery;
 mod calendar;
 mod clock;
 mod config;
@@ -9,6 +10,7 @@ mod lyrics;
 mod platform;
 mod pomodoro;
 mod state;
+mod sysmon;
 mod todo;
 mod tray;
 mod ui;
@@ -28,7 +30,9 @@ use crate::config::Config;
 use crate::ipc::{DaemonSnapshot, DaemonToUi, UiToDaemon, read_msg, write_msg};
 use crate::lyrics::{LyricsData, LyricsRequest};
 use crate::platform::{MediaCommand, PlatformEvent};
-use crate::ui::{AppChannels, IslandApp, SettingsIpcTarget, UiControlEvent, WINDOW_TITLE};
+use crate::ui::{AppChannels, SettingsIpcTarget, UiControlEvent};
+#[cfg(not(windows))]
+use crate::ui::{IslandApp, WINDOW_TITLE};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -299,6 +303,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
             calendar_cmd_tx,
             ui_ctrl_rx: Some(ui_ctrl_rx),
             daemon_tx: Some(daemon_tx),
+            sysmon_cmd_tx: None,
         };
         return match platform::windows_overlay::run_layered_ipc_client(
             config,
@@ -371,6 +376,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                         calendar_cmd_tx,
                         ui_ctrl_rx: Some(ui_ctrl_rx),
                         daemon_tx: Some(daemon_tx),
+                        sysmon_cmd_tx: None,
                     },
                     None,
                     demo_mode,

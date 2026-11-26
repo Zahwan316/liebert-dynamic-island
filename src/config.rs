@@ -64,6 +64,42 @@ impl TextAlign {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum TaskbarFormat {
+    #[default]
+    CompactText,
+    IconValue,
+    MiniBar,
+}
+
+impl TaskbarFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CompactText => "Compact Text",
+            Self::IconValue => "Icon + Value",
+            Self::MiniBar => "Mini Bar",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum TaskbarPosition {
+    #[default]
+    LeftOfTray,
+    RightOfTray,
+    TopOfTaskbar,
+}
+
+impl TaskbarPosition {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LeftOfTray => "Left of Tray",
+            Self::RightOfTray => "Right of Tray",
+            Self::TopOfTaskbar => "Top of Taskbar",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
@@ -106,6 +142,18 @@ pub struct Config {
     pub pomodoro_short_break_mins: u64,
     pub pomodoro_long_break_mins: u64,
     pub google_calendar_ics_url: String,
+    pub taskbar_monitor_enabled: bool,
+    pub taskbar_show_cpu: bool,
+    pub taskbar_show_ram: bool,
+    pub taskbar_show_disk: bool,
+    pub taskbar_show_network: bool,
+    pub taskbar_show_battery: bool,
+    pub taskbar_format: TaskbarFormat,
+    pub taskbar_position: TaskbarPosition,
+    pub taskbar_interval_ms: u64,
+    pub battery_low_alerts: bool,
+    pub battery_warn_pct: u8,
+    pub battery_critical_pct: u8,
 }
 
 impl Default for Config {
@@ -150,6 +198,18 @@ impl Default for Config {
             pomodoro_short_break_mins: 5,
             pomodoro_long_break_mins: 15,
             google_calendar_ics_url: String::new(),
+            taskbar_monitor_enabled: true,
+            taskbar_show_cpu: true,
+            taskbar_show_ram: true,
+            taskbar_show_disk: false,
+            taskbar_show_network: true,
+            taskbar_show_battery: true,
+            taskbar_format: TaskbarFormat::CompactText,
+            taskbar_position: TaskbarPosition::LeftOfTray,
+            taskbar_interval_ms: 1000,
+            battery_low_alerts: true,
+            battery_warn_pct: 20,
+            battery_critical_pct: 10,
         }
     }
 }
@@ -183,6 +243,9 @@ impl Config {
         cfg.pomodoro_focus_mins = cfg.pomodoro_focus_mins.clamp(1, 120);
         cfg.pomodoro_short_break_mins = cfg.pomodoro_short_break_mins.clamp(1, 60);
         cfg.pomodoro_long_break_mins = cfg.pomodoro_long_break_mins.clamp(1, 90);
+        cfg.taskbar_interval_ms = cfg.taskbar_interval_ms.clamp(500, 5000);
+        cfg.battery_warn_pct = cfg.battery_warn_pct.clamp(5, 50);
+        cfg.battery_critical_pct = cfg.battery_critical_pct.clamp(3, 30).min(cfg.battery_warn_pct);
         cfg
     }
 
