@@ -10,6 +10,11 @@ tags:
 
 ## 2026-11-27
 
+### Added (v0.1.7) — Windows Installer
+
+- `installer/windows/installer.nsi`, `README.md`, `dist/liebert-dynamic-island-windows-x86_64-setup.exe`, `dist/liebert-dynamic-island-windows-x86_64.zip`: Installer Windows **berhasil dibangun di host Linux** memakai container Docker `rust:slim` + `nsis` + `gcc-mingw-w64-x86-64`. Binary di-cross-compile ke `x86_64-pc-windows-gnu`, lalu `makensis -DAPP_VERSION=0.1.7 -DSTAGING_DIR=... -DOUT_FILE=...` menghasilkan installer NSIS per-user (Start Menu + uninstaller). Catatan: di Linux opsi `makensis` memakai `-D`, bukan `/D`; perintah lengkap ditambahkan ke `README.md`.
+- Artefak terverifikasi: `dist/liebert-dynamic-island-windows-x86_64-setup.exe` **`4,06 MB`** (SHA256 `204b41f7508d3e591882fd96edd318b8ca252a73ffb18649ee4ba514ddf19b00`), `dist/liebert-dynamic-island-windows-x86_64.zip` **`5,0 MB`**. `file` mengenali installer sebagai `Nullsoft Installer self-extracting archive`, dan `7z l` menunjukkan payload `liebert-dynamic-island.exe`, `LICENSE.md`, `README.md`, serta `uninstall.exe`. Tidak ada perubahan kode Rust pada request ini; keduanya berada di `dist/` yang di-gitignore.
+
 ### Changed (v0.1.7)
 
 - `src/ui/mod.rs`: Header mode Expanded kini **hanya** menampilkan tulisan tab aktif dan tombol Settings; strip tab, chevron header, dan toggle Notch/Island dihapus (toggle tetap tersedia di Settings → Display). Navigasi Left/Right sudah tersedia lewat keyboard, dan tombol chevron vektor dipindah ke **tengah tepi kiri/kanan kartu expanded** (`draw_side_nav`, `ui.interact` + `paint_icon`) sehingga tidak mengganggu baris header. Berlaku untuk Linux **dan** Windows karena keduanya memakai `render_island_ui`.

@@ -306,6 +306,25 @@ cargo build --release                      # Build stripped LTO release binary
 #   makensis /DAPP_VERSION=0.1.7 installer\windows\installer.nsi
 ```
 
+Pada host Linux, installer Windows yang sama dapat dibangun tanpa mesin Windows memakai Docker (cross-compile GNU + `makensis`):
+
+```sh
+docker run --rm -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/work -w /work rust:slim bash -c '
+  apt-get update -qq && apt-get install -y -qq nsis gcc-mingw-w64-x86-64 >/dev/null 2>&1
+  export PATH=/usr/local/cargo/bin:$PATH
+  rustup target add x86_64-pc-windows-gnu >/dev/null
+  cargo build --release --locked --target x86_64-pc-windows-gnu
+  mkdir -p dist/staging-win
+  cp target/x86_64-pc-windows-gnu/release/liebert-dynamic-island.exe dist/staging-win/
+  cp LICENSE.md README.md dist/staging-win/
+  makensis -DAPP_VERSION=0.1.7 -DSTAGING_DIR=/work/dist/staging-win \
+    -DOUT_FILE=/work/dist/liebert-dynamic-island-windows-x86_64-setup.exe \
+    installer/windows/installer.nsi
+'
+```
+
+Hasilnya: `dist/liebert-dynamic-island-windows-x86_64-setup.exe` (per-user NSIS installer).
+
 ---
 
 ## Troubleshooting
