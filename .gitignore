@@ -8,3 +8,11 @@ target/
 # Linux AppImage packaging output
 dist/
 *.AppImage
+
+# Dev
+.agents/
+skills-lock.json
+
+# Docs 
+docs/
+

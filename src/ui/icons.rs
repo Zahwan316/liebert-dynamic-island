@@ -4,6 +4,7 @@ use eframe::egui::{
     self, Color32, CornerRadius, CursorIcon, Pos2, Rect, Response, Sense, Stroke, Vec2,
 };
 
+#[allow(dead_code)] // Shared vector icon variants across views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IconKind {
     Settings,

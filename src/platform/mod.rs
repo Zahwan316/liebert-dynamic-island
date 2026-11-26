@@ -40,24 +40,33 @@ pub struct MediaTrack {
     pub duration_ms: u64,
     pub shuffle: bool,
     pub repeat: RepeatMode,
-    pub album_art: Option<AlbumArt>,
+    pub album_art: Option<Arc<AlbumArt>>,
     pub updated_at: Instant,
 }
 
-pub fn decode_album_art(bytes: &[u8]) -> Option<AlbumArt> {
-    let img = image::load_from_memory(bytes).ok()?;
+pub fn decode_album_art(bytes: &[u8]) -> Option<Arc<AlbumArt>> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(2048);
+    limits.max_image_height = Some(2048);
+    limits.max_alloc = Some(16 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
     let resized = img.resize(160, 160, image::imageops::FilterType::Triangle);
-    let rgba_img = resized.to_rgba8();
+    drop(img);
+    let rgba_img = resized.into_rgba8();
     let width = rgba_img.width() as usize;
     let height = rgba_img.height() as usize;
     let rgba = rgba_img.into_raw();
     let dominant_rgb = extract_dominant_accent(&rgba);
-    Some(AlbumArt {
+    Some(Arc::new(AlbumArt {
         width,
         height,
         rgba,
         dominant_rgb,
-    })
+    }))
 }
 
 pub fn extract_dominant_accent(rgba: &[u8]) -> Option<[u8; 3]> {
@@ -120,7 +129,7 @@ pub enum PlatformEvent {
     Removed(String),
     Status(ListenerStatus),
     Media(Option<MediaTrack>),
-    Fullscreen(bool),
+    Fullscreen(bool, bool),
     LyricsLoaded {
         artist: String,
         title: String,
@@ -129,6 +138,7 @@ pub enum PlatformEvent {
     CalendarUpdated(Result<Vec<CalendarEvent>, String>),
 }
 
+#[allow(dead_code)] // Variants used across Linux/Windows font specs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontFamilyTarget {
     Proportional,
@@ -151,6 +161,7 @@ pub struct HoverPollInput<'a> {
     pub pointer_busy: bool,
     pub currently_hovered: bool,
     pub visible: bool,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub animating: bool,
     pub top_offset_px: f32,
     pub trigger_width_px: f32,
@@ -228,6 +239,7 @@ pub fn overlay_resizable() -> bool {
     false
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn should_send_outer_position() -> bool {
     #[cfg(target_os = "linux")]
     return linux::should_send_outer_position();
@@ -262,7 +274,7 @@ pub fn apply_overlay_window_setup(window_title: &str) -> bool {
     #[cfg(windows)]
     {
         windows::apply_no_activate_hook(window_title);
-        return true;
+        true
     }
 
     #[cfg(target_os = "linux")]
@@ -314,6 +326,11 @@ pub fn set_overlay_click_through(window_title: &str, passthrough: bool) {
 pub fn pin_window_top_y(window_title: &str, target_y_px: i32) {
     #[cfg(windows)]
     windows::pin_window_top_y(window_title, target_y_px);
+
+    #[cfg(not(windows))]
+    let _ = (window_title, target_y_px);
+}
+
 pub fn ensure_overlay_topmost(window_title: &str, force: bool) {
     #[cfg(target_os = "linux")]
     linux::ensure_overlay_topmost(window_title, force);
@@ -363,8 +380,25 @@ pub fn is_cursor_in_screen_rect(
     }
 }
 
-#[allow(dead_code)] // Used as fallback on non-rect cursor checks.
-pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
+pub fn is_cursor_in_top_trigger(
+    top_offset_px: f32,
+    trigger_width_px: f32,
+    pixels_per_point: f32,
+) -> Option<bool> {
+    #[cfg(windows)]
+    return windows::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
+
+    #[cfg(target_os = "linux")]
+    return linux::is_cursor_in_top_trigger(top_offset_px, trigger_width_px, pixels_per_point);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = (top_offset_px, trigger_width_px, pixels_per_point);
+        None
+    }
+}
+
+pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
     #[cfg(windows)]
     return windows::detect_overlay_hover(input);
 
@@ -474,15 +508,27 @@ pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
     Vec::new()
 }
 
-pub fn cjk_fallback_fonts() -> Vec<FontFileSpec> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CjkScript {
+    JapaneseOrHan,
+    Korean,
+}
+
+pub fn cjk_fallback_fonts_for(script: CjkScript) -> Vec<FontFileSpec> {
     #[cfg(windows)]
-    return windows::cjk_fallback_fonts();
+    return windows::cjk_fallback_fonts_for(script);
 
     #[cfg(target_os = "linux")]
-    return linux::cjk_fallback_fonts();
+    {
+        let _ = script;
+        linux::cjk_fallback_fonts()
+    }
 
     #[cfg(not(any(windows, target_os = "linux")))]
-    Vec::new()
+    {
+        let _ = script;
+        Vec::new()
+    }
 }
 
 #[cfg(test)]

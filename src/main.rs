@@ -61,21 +61,10 @@ fn main() -> ExitCode {
         }
     };
 
-    let (event_tx, event_rx) = mpsc::channel();
-    let (lyrics_req_tx, lyrics_req_rx) = mpsc::channel();
-    let (media_cmd_tx, media_cmd_rx) = mpsc::channel();
-    let (calendar_cmd_tx, calendar_cmd_rx) = mpsc::channel();
-
     let canvas = ui::permanent_canvas_size(&config);
-    let initial_x = ((platform::primary_monitor_logical_width() - canvas.x) * 0.5).max(0.0);
-    let ear_w = if config.notch_dock_mode {
-        (12.0 * config.scale).round() * 2.0
-    } else {
-        0.0
-    };
-    let initial_w = config.idle_width * config.scale + ear_w;
-    let initial_h = 30.0 * config.scale;
-    let initial_x = ((platform::primary_monitor_logical_width(1.0) - initial_w) * 0.5).max(0.0);
+    let initial_x = ((platform::primary_monitor_logical_width(1.0) - canvas.x) * 0.5).max(0.0);
+    let initial_w = canvas.x;
+    let initial_h = canvas.y;
     let initial_y = if config.notch_dock_mode {
         0.0
     } else {
@@ -95,8 +84,7 @@ fn main() -> ExitCode {
             Ok(()) => return ExitCode::SUCCESS,
             Err(err) => {
                 eprintln!("Warning: Wayland wlr-layer-shell unavailable ({err}), falling back to eframe");
-                let fallback_tray =
-                    TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode).ok();
+                let fallback_tray = TrayController::new(config.auto_hide_when_idle).ok();
                 return run_eframe_overlay(
                     config,
                     fallback_tray,
@@ -151,7 +139,7 @@ fn run_eframe_overlay(
             .with_minimize_button(false)
             .with_maximize_button(false)
             .with_close_button(false)
-            .with_inner_size([canvas.x, canvas.y])
+            .with_inner_size([initial_w, initial_h])
             .with_position([initial_x, 0.0]),
         ..Default::default()
     };

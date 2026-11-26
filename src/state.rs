@@ -65,9 +65,18 @@ impl IslandState {
         }
     }
 
-    pub fn push_notification(&mut self, item: NotificationItem, now: Instant) {
+    pub fn push_notification(&mut self, mut item: NotificationItem, now: Instant) {
         if self.paused {
             return;
+        }
+        const MAX_BODY_BYTES: usize = 2000;
+        const MAX_QUEUE_LEN: usize = 32;
+        if item.body.len() > MAX_BODY_BYTES {
+            let mut cut = MAX_BODY_BYTES;
+            while cut > 0 && !item.body.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            item.body.truncate(cut);
         }
         if let Some(active) = &mut self.active
             && active.id == item.id
@@ -86,6 +95,9 @@ impl IslandState {
         if self.active.is_none() {
             self.activate(item, now);
         } else {
+            if self.queue.len() >= MAX_QUEUE_LEN {
+                self.queue.pop_front();
+            }
             self.queue.push_back(item);
         }
     }
@@ -404,5 +416,20 @@ mod tests {
         // When exiting fullscreen, idle_since resets so the notch stays visible for auto_hide_delay.
         assert!(state.set_fullscreen_active(false));
         assert!(state.should_be_visible(Instant::now()));
+    }
+
+    #[test]
+    fn notification_queue_is_bounded_and_body_is_truncated() {
+        let t0 = Instant::now();
+        let mut state = IslandState::new(false, Duration::from_secs(5));
+        let mut huge = sample("0", "Huge");
+        huge.body = "a".repeat(3000);
+        state.push_notification(huge, t0);
+        assert_eq!(state.active.as_ref().unwrap().body.len(), 2000);
+
+        for i in 1..=40 {
+            state.push_notification(sample(&i.to_string(), "Burst"), t0);
+        }
+        assert_eq!(state.queued_count(), 32);
     }
 }

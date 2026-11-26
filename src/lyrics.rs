@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -43,8 +44,8 @@ pub struct PlainLyricLine {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LyricsData {
     Loading,
-    Synced(Vec<LyricLine>),
-    Plain(Vec<PlainLyricLine>),
+    Synced(Arc<[LyricLine]>),
+    Plain(Arc<[PlainLyricLine]>),
     NotFound,
 }
 
@@ -298,7 +299,8 @@ pub fn has_non_latin_script(text: &str) -> bool {
     text.chars().any(|c| c.is_alphabetic() && c > '\u{024F}')
 }
 
-pub fn has_cjk_or_hangul(text: &str) -> bool {
+#[cfg(test)]
+fn has_cjk_or_hangul(text: &str) -> bool {
     text.chars().any(|c| {
         matches!(
             c as u32,
@@ -342,9 +344,32 @@ pub fn spawn_lyrics_worker(
                 .timeout_global(Some(Duration::from_secs(5)))
                 .build();
             let agent: Agent = config.into();
+            const MAX_LYRICS_CACHE: usize = 8;
             type EnrichedCacheKey = (String, String, Option<u64>, Option<String>, bool);
             let mut raw_cache: HashMap<(String, String, Option<u64>), LyricsData> = HashMap::new();
+            let mut raw_order: VecDeque<(String, String, Option<u64>)> = VecDeque::new();
             let mut enriched_cache: HashMap<EnrichedCacheKey, LyricsData> = HashMap::new();
+            let mut enriched_order: VecDeque<EnrichedCacheKey> = VecDeque::new();
+
+            fn cache_insert<K: Eq + Hash + Clone>(
+                map: &mut HashMap<K, LyricsData>,
+                order: &mut VecDeque<K>,
+                key: K,
+                val: LyricsData,
+                cap: usize,
+            ) {
+                if !map.contains_key(&key) {
+                    while map.len() >= cap {
+                        if let Some(old) = order.pop_front() {
+                            map.remove(&old);
+                        } else {
+                            break;
+                        }
+                    }
+                    order.push_back(key.clone());
+                }
+                map.insert(key, val);
+            }
 
             while let Ok(mut req) = req_rx.recv() {
                 while let Ok(newer) = req_rx.try_recv() {
@@ -368,7 +393,15 @@ pub fn spawn_lyrics_worker(
                     } else {
                         let fetched =
                             fetch_lyrics(&agent, &req.artist, &req.title, req.duration_secs);
-                        raw_cache.insert(track_key, fetched.clone());
+                        if !matches!(fetched, LyricsData::NotFound) {
+                            cache_insert(
+                                &mut raw_cache,
+                                &mut raw_order,
+                                track_key,
+                                fetched.clone(),
+                                MAX_LYRICS_CACHE,
+                            );
+                        }
                         fetched
                     };
                     let enriched = enrich_lyrics_data(
@@ -377,7 +410,15 @@ pub fn spawn_lyrics_worker(
                         req.translate_lang.as_deref(),
                         req.need_romaji,
                     );
-                    enriched_cache.insert(full_key, enriched.clone());
+                    if !matches!(enriched, LyricsData::NotFound) {
+                        cache_insert(
+                            &mut enriched_cache,
+                            &mut enriched_order,
+                            full_key,
+                            enriched.clone(),
+                            MAX_LYRICS_CACHE,
+                        );
+                    }
                     enriched
                 };
 
@@ -394,7 +435,7 @@ pub fn spawn_lyrics_worker(
 
 fn enrich_lyrics_data(
     agent: &Agent,
-    mut data: LyricsData,
+    data: LyricsData,
     translate_lang: Option<&str>,
     need_romaji: bool,
 ) -> LyricsData {
@@ -402,8 +443,9 @@ fn enrich_lyrics_data(
         return data;
     }
 
-    match &mut data {
-        LyricsData::Synced(lines) => {
+    match data {
+        LyricsData::Synced(lines_arc) => {
+            let mut lines = lines_arc.to_vec();
             let texts: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
             let (romajis, translations) = enrich_lines(agent, &texts, translate_lang, need_romaji);
             for (line, (r, t)) in lines
@@ -413,8 +455,10 @@ fn enrich_lyrics_data(
                 line.romaji = r;
                 line.translation = t;
             }
+            LyricsData::Synced(Arc::from(lines))
         }
-        LyricsData::Plain(lines) => {
+        LyricsData::Plain(lines_arc) => {
+            let mut lines = lines_arc.to_vec();
             let texts: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
             let (romajis, translations) = enrich_lines(agent, &texts, translate_lang, need_romaji);
             for (line, (r, t)) in lines
@@ -424,11 +468,10 @@ fn enrich_lyrics_data(
                 line.romaji = r;
                 line.translation = t;
             }
+            LyricsData::Plain(Arc::from(lines))
         }
-        LyricsData::Loading | LyricsData::NotFound => {}
+        other => other,
     }
-
-    data
 }
 
 fn enrich_lines(
@@ -487,6 +530,8 @@ fn query_google_translate(
         .call()
         .ok()?
         .body_mut()
+        .with_config()
+        .limit(512 * 1024)
         .read_to_string()
         .ok()?;
     Some(parse_google_translate_json(&body))
@@ -568,7 +613,14 @@ fn call_lrclib_get(
     if let Some(dur) = duration_secs {
         req = req.query("duration", dur.to_string());
     }
-    let body = req.call().ok()?.body_mut().read_to_string().ok()?;
+    let body = req
+        .call()
+        .ok()?
+        .body_mut()
+        .with_config()
+        .limit(512 * 1024)
+        .read_to_string()
+        .ok()?;
     let parsed: LrcLibResponse = serde_json::from_str(&body).ok()?;
     response_to_lyrics(parsed)
 }
@@ -590,6 +642,8 @@ fn query_lrclib_search(
         .call()
         .ok()?
         .body_mut()
+        .with_config()
+        .limit(512 * 1024)
         .read_to_string()
         .ok()?;
     let mut list: Vec<LrcLibResponse> = serde_json::from_str(&body).ok()?;
@@ -610,7 +664,7 @@ fn response_to_lyrics(resp: LrcLibResponse) -> Option<LyricsData> {
     if let Some(synced) = resp.synced_lyrics {
         let lines = parse_lrc(&synced);
         if !lines.is_empty() {
-            return Some(LyricsData::Synced(lines));
+            return Some(LyricsData::Synced(Arc::from(lines)));
         }
     }
     if let Some(plain) = resp.plain_lyrics {
@@ -625,7 +679,7 @@ fn response_to_lyrics(resp: LrcLibResponse) -> Option<LyricsData> {
             })
             .collect();
         if !lines.is_empty() {
-            return Some(LyricsData::Plain(lines));
+            return Some(LyricsData::Plain(Arc::from(lines)));
         }
     }
     None
@@ -677,7 +731,7 @@ mod tests {
         let lines = parse_lrc(
             "[00:00.00]<00:00.00>La <00:01.00>la\n[00:02.00]Next line",
         );
-        let data = LyricsData::Synced(lines);
+        let data = LyricsData::Synced(Arc::from(lines));
         let mid = active_karaoke(&data, 1000).expect("active line");
         assert_eq!(mid.text, "La la");
         assert!(mid.progress > 0.3 && mid.progress < 0.8);
@@ -736,7 +790,7 @@ mod tests {
         assert_eq!(lines[0].end_ms, Some(14_000));
         assert_eq!(lines[1].end_ms, None);
 
-        let data = LyricsData::Synced(lines);
+        let data = LyricsData::Synced(Arc::from(lines));
         let at_break = active_karaoke(&data, 15_000).expect("line before solo");
         assert_eq!(at_break.text, "Before solo");
         assert_eq!(at_break.progress, 1.0);

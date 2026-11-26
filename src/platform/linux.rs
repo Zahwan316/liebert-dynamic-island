@@ -623,7 +623,7 @@ pub fn spawn_media_listener(
         .name("linux-mpris-media".to_owned())
         .spawn(move || {
             let mut last_snapshot: Option<(String, String, bool, u64, bool, RepeatMode)> = None;
-            let mut cached_art: Option<((String, String), Option<AlbumArt>)> = None;
+            let mut cached_art: CachedAlbumArt = None;
             let _ = zbus::block_on(async move {
                 let conn = Connection::session().await?;
                 let dbus = zbus::fdo::DBusProxy::new(&conn).await?;
@@ -763,10 +763,12 @@ pub fn spawn_media_listener(
         .expect("spawn linux media thread");
 }
 
+type CachedAlbumArt = Option<((String, String), Option<Arc<AlbumArt>>)>;
+
 async fn read_mpris_track(
     conn: &Connection,
     bus: &str,
-    cached_art: &mut Option<((String, String), Option<AlbumArt>)>,
+    cached_art: &mut CachedAlbumArt,
 ) -> Option<MediaTrack> {
     let props = Proxy::new(
         conn,
@@ -861,7 +863,7 @@ async fn read_mpris_track(
     })
 }
 
-fn load_art_from_url(url: &str) -> Option<AlbumArt> {
+fn load_art_from_url(url: &str) -> Option<Arc<AlbumArt>> {
     if let Some(path) = url.strip_prefix("file://") {
         let bytes = std::fs::read(path).ok()?;
         return decode_album_art(&bytes);

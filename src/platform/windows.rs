@@ -36,7 +36,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, FindWindowW, GA_ROOT, GWL_EXSTYLE, GWL_STYLE, GWLP_WNDPROC, GetAncestor,
     GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow, GetShellWindow,
     GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HWND_NOTOPMOST,
-    HWND_TOPMOST, IsIconic, IsWindowVisible, MONITORINFOF_PRIMARY, SM_CXSCREEN, SW_HIDE, SW_RESTORE,
+    HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MONITORINFOF_PRIMARY, SM_CXSCREEN, SW_HIDE,
+    SW_RESTORE,
     SW_SHOWNOACTIVATE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
     SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_NCCALCSIZE, WNDPROC,
     WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
@@ -332,7 +333,7 @@ pub fn spawn_media_listener(
             }
 
             let mut last_snapshot: Option<MediaSnapshot> = None;
-            let mut cached_art: Option<((String, String), Option<AlbumArt>)> = None;
+            let mut cached_art: CachedAlbumArt = None;
             loop {
                 let current = read_smtc_track(&manager, &mut cached_art);
                 let snapshot = current.as_ref().map(|(t, raw_pos_ms, last_updated_ticks)| {
@@ -406,9 +407,11 @@ fn current_filetime_ticks() -> i64 {
         .unwrap_or(0)
 }
 
+type CachedAlbumArt = Option<((String, String), Option<Arc<AlbumArt>>)>;
+
 fn read_smtc_track(
     manager: &GlobalSystemMediaTransportControlsSessionManager,
-    cached_art: &mut Option<((String, String), Option<AlbumArt>)>,
+    cached_art: &mut CachedAlbumArt,
 ) -> Option<(MediaTrack, u64, i64)> {
     let session = manager.GetCurrentSession().ok()?;
     let props = session.TryGetMediaPropertiesAsync().ok()?.join().ok()?;
@@ -502,7 +505,7 @@ fn read_smtc_track(
 
 fn read_smtc_thumbnail(
     props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
-) -> Option<AlbumArt> {
+) -> Option<Arc<AlbumArt>> {
     let thumb_ref = props.Thumbnail().ok()?;
     let stream = thumb_ref.OpenReadAsync().ok()?.join().ok()?;
     let size = stream.Size().ok()? as usize;
@@ -572,21 +575,21 @@ pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
     ]
 }
 
-pub fn cjk_fallback_fonts() -> Vec<FontFileSpec> {
-    vec![
-        FontFileSpec {
+pub fn cjk_fallback_fonts_for(script: super::CjkScript) -> Vec<FontFileSpec> {
+    match script {
+        super::CjkScript::JapaneseOrHan => vec![FontFileSpec {
             name: "win_msgothic".to_owned(),
             path: "C:\\Windows\\Fonts\\msgothic.ttc".to_owned(),
             family: FontFamilyTarget::Both,
             face_indices: &[0],
-        },
-        FontFileSpec {
+        }],
+        super::CjkScript::Korean => vec![FontFileSpec {
             name: "win_malgun".to_owned(),
             path: "C:\\Windows\\Fonts\\malgun.ttf".to_owned(),
             family: FontFamilyTarget::Both,
             face_indices: &[0],
-        },
-    ]
+        }],
+    }
 }
 
 static ORIG_WNDPROC: AtomicIsize = AtomicIsize::new(0);
@@ -842,15 +845,15 @@ pub fn spawn_fullscreen_watcher(
     std::thread::Builder::new()
         .name("win-fullscreen-watcher".to_owned())
         .spawn(move || {
-            let mut last_fs = is_foreground_fullscreen();
-            let _ = tx.send(PlatformEvent::Fullscreen(last_fs));
+            let mut last_fs = detect_fullscreen_state();
+            let _ = tx.send(PlatformEvent::Fullscreen(last_fs.0, last_fs.1));
             on_wake();
             loop {
                 std::thread::sleep(Duration::from_millis(250));
-                let fs = is_foreground_fullscreen();
+                let fs = detect_fullscreen_state();
                 if fs != last_fs {
                     last_fs = fs;
-                    if tx.send(PlatformEvent::Fullscreen(fs)).is_err() {
+                    if tx.send(PlatformEvent::Fullscreen(fs.0, fs.1)).is_err() {
                         break;
                     }
                     on_wake();
@@ -860,16 +863,21 @@ pub fn spawn_fullscreen_watcher(
         .expect("spawn windows fullscreen watcher thread");
 }
 
+#[allow(dead_code)] // Facade compatibility wrapper.
 pub fn is_foreground_fullscreen() -> bool {
+    detect_fullscreen_state().1
+}
+
+pub fn detect_fullscreen_state() -> (bool, bool) {
     let fg = unsafe { GetForegroundWindow() };
     if fg.is_invalid() {
-        return false;
+        return (false, false);
     }
     if fg == unsafe { GetDesktopWindow() } || fg == unsafe { GetShellWindow() } {
-        return false;
+        return (false, false);
     }
     if unsafe { IsIconic(fg) }.as_bool() || !unsafe { IsWindowVisible(fg) }.as_bool() {
-        return false;
+        return (false, false);
     }
 
     let root = unsafe { GetAncestor(fg, GA_ROOT) };
@@ -878,7 +886,7 @@ pub fn is_foreground_fullscreen() -> bool {
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     if pid == std::process::id() {
-        return false;
+        return (false, false);
     }
 
     let mut class_buf = [0u16; 64];
@@ -889,7 +897,7 @@ pub fn is_foreground_fullscreen() -> bool {
             class_name.as_str(),
             "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
         ) {
-            return false;
+            return (false, false);
         }
     }
 
@@ -901,7 +909,7 @@ pub fn is_foreground_fullscreen() -> bool {
     if !unsafe { GetMonitorInfoW(hmon, &mut info) }.as_bool()
         || (info.dwFlags & MONITORINFOF_PRIMARY) == 0
     {
-        return false;
+        return (false, false);
     }
 
     if let Ok(quns) = unsafe { SHQueryUserNotificationState() }
@@ -910,9 +918,10 @@ pub fn is_foreground_fullscreen() -> bool {
             QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_BUSY | QUNS_PRESENTATION_MODE
         )
     {
-        return true;
+        return (true, true);
     }
 
+    let is_zoomed = unsafe { IsZoomed(hwnd) }.as_bool();
     let mut win_rect = RECT::default();
     let dwm_ok = unsafe {
         DwmGetWindowAttribute(
@@ -924,36 +933,37 @@ pub fn is_foreground_fullscreen() -> bool {
     }
     .is_ok();
     if !dwm_ok && unsafe { GetWindowRect(hwnd, &mut win_rect) }.is_err() {
-        return false;
+        return (false, is_zoomed);
     }
 
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
     let has_caption = (style & WS_CAPTION.0) == WS_CAPTION.0;
-    is_rect_covering_monitor_as_fullscreen(win_rect, info.rcMonitor, info.rcWork, has_caption)
+    let (exclusive, windowed) = classify_fullscreen_rects(win_rect, info.rcMonitor, info.rcWork, has_caption);
+    (exclusive, windowed || is_zoomed)
 }
 
-fn is_rect_covering_monitor_as_fullscreen(
+fn classify_fullscreen_rects(
     win_rect: RECT,
     mon: RECT,
     work: RECT,
     has_caption: bool,
-) -> bool {
+) -> (bool, bool) {
     const TOL: i32 = 2;
     let covers_monitor = win_rect.left <= mon.left + TOL
         && win_rect.top <= mon.top + TOL
         && win_rect.right >= mon.right - TOL
         && win_rect.bottom >= mon.bottom - TOL;
-    if !covers_monitor {
-        return false;
-    }
-    // A 2px work-area inset means an auto-hidden taskbar, which a maximized window leaves
-    // uncovered (bottom == work.bottom), whereas windowed-fullscreen covers mon.bottom.
+    let covers_work = win_rect.left <= work.left + TOL
+        && win_rect.top <= work.top + TOL
+        && win_rect.right >= work.right - TOL
+        && win_rect.bottom >= work.bottom - TOL;
     let has_visible_taskbar = (mon.bottom - work.bottom) >= 20
         || (work.top - mon.top) >= 20
         || (work.left - mon.left) >= 20
         || (mon.right - work.right) >= 20;
     let covers_autohide_edge = work.bottom < mon.bottom && win_rect.bottom >= mon.bottom;
-    has_visible_taskbar || !has_caption || covers_autohide_edge
+    let exclusive = covers_monitor && (has_visible_taskbar || !has_caption || covers_autohide_edge);
+    (exclusive, exclusive || covers_monitor || covers_work)
 }
 
 pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
@@ -988,47 +998,30 @@ mod tests {
         let work_taskbar = rect(0, 0, 1920, 1040);
         let work_autohide = rect(0, 0, 1920, 1078);
 
-        // Maximized with visible taskbar does not cover the monitor.
-        assert!(!is_rect_covering_monitor_as_fullscreen(
-            rect(-8, -8, 1928, 1048),
-            mon,
-            work_taskbar,
-            true
-        ));
-        // Maximized with auto-hidden taskbar stops at work_autohide.bottom (1078 < 1080).
-        assert!(!is_rect_covering_monitor_as_fullscreen(
-            rect(0, 0, 1920, 1078),
-            mon,
-            work_autohide,
-            true
-        ));
-        // Windowed-fullscreen with auto-hidden taskbar covers full monitor height (1080).
-        assert!(is_rect_covering_monitor_as_fullscreen(
-            rect(0, 0, 1920, 1080),
-            mon,
-            work_autohide,
-            true
-        ));
-        // Borderless fullscreen with auto-hidden taskbar is fullscreen.
-        assert!(is_rect_covering_monitor_as_fullscreen(
-            rect(0, 0, 1920, 1080),
-            mon,
-            work_autohide,
-            false
-        ));
-        // Window covering the monitor while a taskbar exists is fullscreen.
-        assert!(is_rect_covering_monitor_as_fullscreen(
-            rect(0, 0, 1920, 1080),
-            mon,
-            work_taskbar,
-            true
-        ));
-        // Small windowed app.
-        assert!(!is_rect_covering_monitor_as_fullscreen(
-            rect(100, 100, 900, 700),
-            mon,
-            work_taskbar,
-            true
-        ));
+        // Windowed-fullscreen / maximized covering work area with visible taskbar.
+        assert_eq!(
+            classify_fullscreen_rects(rect(-8, -8, 1928, 1048), mon, work_taskbar, true),
+            (false, true)
+        );
+        // Windowed-fullscreen / maximized with auto-hidden taskbar (1078 == work.bottom).
+        assert_eq!(
+            classify_fullscreen_rects(rect(0, 0, 1920, 1078), mon, work_autohide, true),
+            (false, true)
+        );
+        // Exclusive / borderless fullscreen covering full monitor (1080).
+        assert_eq!(
+            classify_fullscreen_rects(rect(0, 0, 1920, 1080), mon, work_autohide, false),
+            (true, true)
+        );
+        // Window covering the monitor while a taskbar exists.
+        assert_eq!(
+            classify_fullscreen_rects(rect(0, 0, 1920, 1080), mon, work_taskbar, true),
+            (true, true)
+        );
+        // Small windowed app does not trigger fullscreen auto-hide.
+        assert_eq!(
+            classify_fullscreen_rects(rect(100, 100, 900, 700), mon, work_taskbar, true),
+            (false, false)
+        );
     }
 }
