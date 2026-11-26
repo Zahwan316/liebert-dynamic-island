@@ -525,6 +525,15 @@ mod imp {
             let text = "MemTotal: 1000 kB\nMemFree: 100 kB\nBuffers: 50 kB\nCached: 250 kB\n";
             assert_eq!(parse_meminfo(text), Some((1000, 400)));
         }
+
+        #[test]
+        fn linux_sampler_reads_live_proc_metrics() {
+            let mut sampler = Sampler::new();
+            let metrics = sampler.sample(true, true);
+            assert!(metrics.ram_total_gb > 0.0);
+            assert!(metrics.ram_pct.is_finite());
+            assert!(metrics.cpu_pct.is_finite());
+        }
     }
 }
 

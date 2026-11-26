@@ -10,6 +10,13 @@ tags:
 
 ## 2026-11-27
 
+### Changed (v0.1.7)
+
+- `src/ui/mod.rs`: Header mode Expanded kini **hanya** menampilkan tulisan tab aktif dan tombol Settings; strip tab, chevron header, dan toggle Notch/Island dihapus (toggle tetap tersedia di Settings → Display). Navigasi Left/Right sudah tersedia lewat keyboard, dan tombol chevron vektor dipindah ke **tengah tepi kiri/kanan kartu expanded** (`draw_side_nav`, `ui.interact` + `paint_icon`) sehingga tidak mengganggu baris header. Berlaku untuk Linux **dan** Windows karena keduanya memakai `render_island_ui`.
+- `src/ui/mod.rs`, `src/ui/settings.rs`: Panel System/Battery menampilkan teks eksplisit **`No battery detected`** bila `/sys/class/power_supply` tidak memiliki baterai (PC desktop), baik di tab System overlay maupun di Settings → System. Bila baterai ada, persentase/status/estimasi waktu tetap ditampilkan seperti sebelumnya.
+- `src/sysmon.rs`: Menambah test integrasi ringan `linux_sampler_reads_live_proc_metrics` yang memanggil sampler `/proc` nyata dan memastikan RAM/CPU terbaca, sebagai bukti system monitor Linux bekerja.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.7`**; AppImage + tar.gz Linux dibangun ulang. `cargo test` **67 passed**, clippy Linux + Windows-target bersih. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-025).
+
 ### Added (v0.1.6)
 
 - `src/ui/icons.rs`, `src/ui/mod.rs`: Ikon panah kiri/kanan digambar sebagai **vektor** (`ChevronLeft`/`ChevronRight`) dan keduanya menjadi tombol klik yang benar-benar mengganti tab. Sebelumnya teks Unicode `◀ ▶` sering hilang pada instalasi Linux tanpa font yang mencakup U+25C0/U+25B6, sehingga indikator arrow tidak terlihat; tombol vektor juga memberi fallback bagi overlay click-through yang tidak bisa menerima fokus keyboard. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-024).

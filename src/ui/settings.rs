@@ -1265,11 +1265,11 @@ fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut 
         });
     });
 
+    ui.add_space(12.0);
+    ui.separator();
+    ui.add_space(6.0);
+    ui.heading("Laptop Battery");
     if let Some(bat) = battery {
-        ui.add_space(12.0);
-        ui.separator();
-        ui.add_space(6.0);
-        ui.heading("Laptop Battery");
         let rem_str = bat
             .remaining_secs
             .map(|s| format!(" — {} remaining", format_remaining(s)))
@@ -1314,5 +1314,7 @@ fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut 
                 *config_dirty = true;
             }
         });
+    } else {
+        ui.label("No battery detected (desktop or unsupported device)");
     }
 }

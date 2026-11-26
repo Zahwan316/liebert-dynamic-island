@@ -2454,11 +2454,7 @@ impl IslandApp {
         let muted = self.muted_color32();
         let align = self.text_align();
         let s = self.config.scale;
-        let mode_btn_label = if self.config.notch_dock_mode {
-            "Island"
-        } else {
-            "Notch"
-        };
+        let nav_card = ui.max_rect();
 
         if let Some(item) = &self.state.active {
             let brand = app_brand_color(&item.app_name, accent);
@@ -2574,7 +2570,7 @@ impl IslandApp {
             self.music_scroll_focus_key = None;
         }
         let row_h = 24.0 * s;
-        let right_w = 82.0 * s;
+        let right_w = 30.0 * s;
         let left_w = (ui.available_width() - right_w - 6.0 * s).max(80.0);
         ui.horizontal(|ui| {
             ui.allocate_ui_with_layout(
@@ -2582,44 +2578,11 @@ impl IslandApp {
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
-                    ui.spacing_mut().item_spacing.x = 6.0 * s;
                     ui.label(
                         RichText::new(self.active_tab.label())
                             .font(FontId::proportional(10.5 * s))
                             .color(muted),
                     );
-                    // Vector chevrons avoid a missing-glyph/tofu on Linux installs without
-                    // a font covering U+25C0/U+25B6, and stay usable when keyboard focus
-                    // cannot reach the click-through overlay.
-                    let arrow_col = Color32::from_rgba_unmultiplied(255, 255, 255, 120);
-                    let arrow_btn = Vec2::new(13.0 * s, row_h);
-                    let arrow_rad = CornerRadius::same((6.0 * s).round() as u8);
-                    for (kind, dir) in [
-                        (IconKind::ChevronLeft, -1),
-                        (IconKind::ChevronRight, 1),
-                    ] {
-                        if icon_button(
-                            ui,
-                            kind,
-                            arrow_btn,
-                            9.0 * s,
-                            arrow_col,
-                            Color32::TRANSPARENT,
-                            arrow_rad,
-                        )
-                        .clicked()
-                        {
-                            let next = navigate_tab(self.active_tab, dir, &self.config);
-                            if next != self.active_tab {
-                                if self.active_tab == IslandTab::Music || next == IslandTab::Music {
-                                    self.music_scroll_focus_key = None;
-                                }
-                                self.active_tab = next;
-                            }
-                            ctx.request_repaint();
-                        }
-                        ui.add_space(1.0 * s);
-                    }
                 },
             );
             ui.add_space(6.0 * s);
@@ -2628,7 +2591,6 @@ impl IslandApp {
                 egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
-                    ui.spacing_mut().item_spacing.x = 4.0 * s;
                     if icon_button(
                         ui,
                         IconKind::Settings,
@@ -2642,24 +2604,6 @@ impl IslandApp {
                     .clicked()
                     {
                         self.open_settings(SettingsTab::Appearance, ctx);
-                    }
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new(mode_btn_label)
-                                    .font(FontId::proportional(10.5 * s))
-                                    .color(muted),
-                            )
-                            .min_size(Vec2::new(48.0 * s, 23.0 * s))
-                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
-                            .corner_radius(CornerRadius::same(10)),
-                        )
-                        .on_hover_cursor(CursorIcon::PointingHand)
-                        .on_hover_text("Switch Notch / Floating Island")
-                        .clicked()
-                    {
-                        self.toggle_dock_mode();
-                        ctx.request_repaint();
                     }
                 },
             );
@@ -2679,6 +2623,45 @@ impl IslandApp {
             IslandTab::Calendar => self.render_calendar_tab(ui),
             IslandTab::Pomodoro => self.render_pomodoro_tab(ui, now),
             IslandTab::System => self.render_system_tab(ui, ctx),
+        }
+        self.draw_side_nav(ui, ctx, nav_card);
+    }
+
+    /// Left/Right tab controls sit at the vertical middle of the expanded card edges,
+    /// replacing the old top tab strip and header chevrons.
+    fn draw_side_nav(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, card: Rect) {
+        let s = self.config.scale;
+        let btn = Vec2::new(20.0 * s, 32.0 * s);
+        let y = card.center().y - btn.y * 0.5;
+        let col = Color32::from_rgba_unmultiplied(255, 255, 255, 150);
+        for (kind, dir, x) in [
+            (IconKind::ChevronLeft, -1, card.min.x + 2.0 * s),
+            (IconKind::ChevronRight, 1, card.max.x - btn.x - 2.0 * s),
+        ] {
+            let rect = Rect::from_min_size(Pos2::new(x, y), btn);
+            let resp = ui.interact(
+                rect,
+                ui.scope_id().with(format!("side_nav_{dir}")),
+                Sense::click(),
+            );
+            let bg = if resp.hovered() {
+                Color32::from_rgba_unmultiplied(255, 255, 255, 42)
+            } else {
+                Color32::from_rgba_unmultiplied(255, 255, 255, 16)
+            };
+            ui.painter()
+                .rect_filled(rect, CornerRadius::same((8.0 * s).round() as u8), bg);
+            paint_icon(ui.painter(), rect, kind, col);
+            if resp.clicked() {
+                let next = navigate_tab(self.active_tab, dir, &self.config);
+                if next != self.active_tab {
+                    if self.active_tab == IslandTab::Music || next == IslandTab::Music {
+                        self.music_scroll_focus_key = None;
+                    }
+                    self.active_tab = next;
+                }
+                ctx.request_repaint();
+            }
         }
     }
 
@@ -2926,6 +2909,12 @@ impl IslandApp {
                 ))
                 .font(FontId::proportional(11.0 * s))
                 .color(text_col),
+            );
+        } else {
+            ui.label(
+                RichText::new("No battery detected")
+                    .font(FontId::proportional(11.0 * s))
+                    .color(muted),
             );
         }
 
