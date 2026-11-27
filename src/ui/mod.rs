@@ -31,7 +31,7 @@ use crate::platform::{
 };
 use crate::pomodoro::{PomodoroPhase, PomodoroTimer};
 use crate::state::{IslandState, IslandVisualState, ListenerStatus, NotificationItem};
-use crate::sysmon::{SysmonCommand, SystemMetrics};
+use crate::sysmon::{SysmonCommand, SystemMetrics, format_speed_bps};
 use crate::todo::TodoStore;
 use crate::tray::{TrayAction, TrayController};
 use crate::ui::icons::{IconKind, icon_button, paint_icon};
@@ -437,7 +437,14 @@ impl IslandApp {
         let initial_idle_w = match config.idle_display {
             IdleDisplayMode::Auto | IdleDisplayMode::Clock => {
                 let (time_str, tz_opt) = clock_display_parts(&config);
-                estimate_clock_pill_width(&time_str, tz_opt.as_deref(), config.scale)
+                let mut w = estimate_clock_pill_width(&time_str, tz_opt.as_deref(), config.scale);
+                if config.idle_show_network_speed {
+                    w += 96.0 * config.scale;
+                }
+                if config.show_battery && config.idle_display != IdleDisplayMode::Battery {
+                    w += 34.0 * config.scale;
+                }
+                w
             }
             _ => config.idle_width * config.scale,
         };
@@ -1244,10 +1251,10 @@ impl IslandApp {
     ) {
         if let Some(tx) = &self.channels.sysmon_cmd_tx {
             let _ = tx.send(SysmonCommand::SetConfig {
-                enabled: self.config.taskbar_monitor_enabled,
+                enabled: self.config.taskbar_monitor_enabled || self.config.idle_show_network_speed,
                 interval_ms: self.config.taskbar_interval_ms,
                 collect_disk: self.config.taskbar_show_disk,
-                collect_net: self.config.taskbar_show_network,
+                collect_net: self.config.taskbar_show_network || self.config.idle_show_network_speed,
             });
         }
         let new_lyric_opts = (
@@ -1733,29 +1740,48 @@ impl IslandApp {
             }
         }
 
-        if self.effective_idle_mode() == IdleDisplayMode::Clock {
+        if self.effective_idle_mode() == IdleDisplayMode::Clock
+            || idle_status_extras_enabled(&self.config)
+        {
             let s = self.config.scale;
             let (time_str, tz_opt) = clock_display_parts(&self.config);
             let stable_time = stabilized_clock_measure_text(&time_str);
+            let extra_key = if self.config.idle_show_network_speed {
+                format!(
+                    "n{}:{}",
+                    format_speed_bps(self.system_metrics.net_down_bps),
+                    format_speed_bps(self.system_metrics.net_up_bps)
+                )
+            } else {
+                String::new()
+            };
+            let bat_key = if self.config.show_battery {
+                self.system_metrics
+                    .battery
+                    .map(|b| format!("b{}", b.percent))
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let cache_key = format!("{stable_time}|{extra_key}|{bat_key}");
             if self
                 .clock_width_cache
                 .as_ref()
-                .is_none_or(|(cached, _)| cached != &stable_time)
+                .is_none_or(|(cached, _)| cached != &cache_key)
             {
-                // Width changes at most once per displayed second; avoid re-laying out the
-                // clock glyphs on every repaint (a per-frame allocation in the idle pill).
-                let job = build_clock_layout_job(
+                let mut job = build_clock_layout_job(
                     &stable_time,
                     tz_opt.as_deref(),
                     Color32::WHITE,
                     Color32::WHITE,
                     s,
                 );
+                append_idle_extras(&self.config, &self.system_metrics, &mut job, Color32::WHITE, s);
                 let text_w = ui.painter().layout_job(job).size().x;
                 let dot_and_gap = (4.2 * s) * 4.0;
                 let chrome_and_pad = 26.0 + 16.0 * s;
                 let measured = (dot_and_gap + text_w + chrome_and_pad).ceil().max(90.0 * s);
-                self.clock_width_cache = Some((stable_time, measured));
+                self.clock_width_cache = Some((cache_key, measured));
             }
             let measured = self
                 .clock_width_cache
@@ -1914,9 +1940,9 @@ impl IslandApp {
                             },
                         );
                         let py = if self.state.visual == IslandVisualState::Idle {
-                            5.0
+                            4.0
                         } else {
-                            9.0
+                            7.0
                         };
                         (13.0 + ear_w, py)
                     };
@@ -1988,10 +2014,12 @@ impl IslandApp {
             self.sync_runtime_config(&ctx, prev_lyric_opts, now);
             if let Some(tx) = &self.channels.sysmon_cmd_tx {
                 let _ = tx.send(SysmonCommand::SetConfig {
-                    enabled: self.config.taskbar_monitor_enabled,
+                    enabled: self.config.taskbar_monitor_enabled
+                        || self.config.idle_show_network_speed,
                     interval_ms: self.config.taskbar_interval_ms,
                     collect_disk: self.config.taskbar_show_disk,
-                    collect_net: self.config.taskbar_show_network,
+                    collect_net: self.config.taskbar_show_network
+                        || self.config.idle_show_network_speed,
                 });
             }
             if let Some(tx) = &self.channels.daemon_tx {
@@ -2303,7 +2331,9 @@ impl IslandApp {
                 } else {
                     accent
                 };
-                let job = build_clock_layout_job(&time_str, tz_opt.as_deref(), text_col, muted, s);
+                let mut job =
+                    build_clock_layout_job(&time_str, tz_opt.as_deref(), text_col, muted, s);
+                append_idle_extras(&self.config, &self.system_metrics, &mut job, muted, s);
                 render_dot_label(ui, dot_color, 4.2 * s, job, egui::Align::Center);
                 return;
             }
@@ -2456,6 +2486,20 @@ impl IslandApp {
                 return;
             }
             _ => {}
+        }
+
+        if idle_status_extras_enabled(&self.config) {
+            let (time_str, tz_opt) = clock_display_parts(&self.config);
+            let dot_color = if self.state.paused {
+                Color32::from_gray(140)
+            } else {
+                accent
+            };
+            let mut job =
+                build_clock_layout_job(&time_str, tz_opt.as_deref(), text_col, muted, s);
+            append_idle_extras(&self.config, &self.system_metrics, &mut job, muted, s);
+            render_dot_label(ui, dot_color, 4.2 * s, job, egui::Align::Center);
+            return;
         }
 
         let (dot_color, text) = if self.state.paused {
@@ -2770,13 +2814,13 @@ impl IslandApp {
                     },
                 );
             });
-            if !is_music_card {
-                ui.add_space(2.0);
-                ui.separator();
-                ui.add_space(2.0);
-            } else {
-                ui.add_space(4.0);
-            }
+                if !is_music_card {
+                    ui.add_space(1.0);
+                    ui.separator();
+                    ui.add_space(1.0);
+                } else {
+                    ui.add_space(2.0);
+                }
 
             match self.active_tab {
                 IslandTab::Overview => self.render_overview_tab(ui, now),
@@ -4828,6 +4872,47 @@ fn render_aligned_truncated_text(
     ui.painter()
         .with_clip_rect(rect)
         .galley(pos, galley, Color32::TRANSPARENT);
+}
+
+fn idle_status_extras_enabled(config: &Config) -> bool {
+    config.idle_show_network_speed
+        || (config.show_battery && config.idle_display != IdleDisplayMode::Battery)
+}
+
+fn append_idle_extras(
+    config: &Config,
+    metrics: &SystemMetrics,
+    job: &mut LayoutJob,
+    muted: Color32,
+    s: f32,
+) {
+    let mut parts: Vec<String> = Vec::new();
+    if config.show_battery
+        && config.idle_display != IdleDisplayMode::Battery
+        && let Some(bat) = metrics.battery
+    {
+        parts.push(format!("{}%", bat.percent));
+    }
+    if config.idle_show_network_speed {
+        parts.push(format!(
+            "↓{} ↑{}",
+            format_speed_bps(metrics.net_down_bps),
+            format_speed_bps(metrics.net_up_bps)
+        ));
+    }
+    if parts.is_empty() {
+        return;
+    }
+    job.append(
+        &format!("  {}", parts.join(" ")),
+        0.0,
+        TextFormat {
+            font_id: FontId::proportional(9.0 * s),
+            color: muted,
+            valign: egui::Align::Center,
+            ..Default::default()
+        },
+    );
 }
 
 fn render_dot_label(

@@ -1275,6 +1275,16 @@ fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut 
         {
             *config_dirty = true;
         }
+        if ui
+            .checkbox(
+                &mut config.idle_show_network_speed,
+                "Show network speed in idle pill",
+            )
+            .on_hover_text("Shows ↓/↑ speed beside clock/minimal idle. Battery also appears in idle when Battery tab is enabled.")
+            .changed()
+        {
+            *config_dirty = true;
+        }
 
         ui.add_enabled_ui(config.taskbar_monitor_enabled, |ui| {
             ui.add_space(6.0);

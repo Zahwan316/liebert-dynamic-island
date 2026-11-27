@@ -288,10 +288,10 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
             Arc::new(move || platform::windows_overlay::post_wake_to_hwnd(&wake_ref));
         crate::sysmon::spawn_sysmon_worker(
             sysmon_cmd_rx,
-            sysmon_config.taskbar_monitor_enabled,
+            sysmon_config.taskbar_monitor_enabled || sysmon_config.idle_show_network_speed,
             sysmon_config.taskbar_interval_ms,
             sysmon_config.taskbar_show_disk,
-            sysmon_config.taskbar_show_network,
+            sysmon_config.taskbar_show_network || sysmon_config.idle_show_network_speed,
             sysmon_event_tx,
             wake.clone(),
         );
@@ -363,10 +363,10 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                     Arc::new(move || egui_ctx.request_repaint());
                 crate::sysmon::spawn_sysmon_worker(
                     sysmon_cmd_rx,
-                    sysmon_config.taskbar_monitor_enabled,
+                    sysmon_config.taskbar_monitor_enabled || sysmon_config.idle_show_network_speed,
                     sysmon_config.taskbar_interval_ms,
                     sysmon_config.taskbar_show_disk,
-                    sysmon_config.taskbar_show_network,
+                    sysmon_config.taskbar_show_network || sysmon_config.idle_show_network_speed,
                     sysmon_event_tx,
                     wake.clone(),
                 );

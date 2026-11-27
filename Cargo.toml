@@ -1,6 +1,6 @@
 [package]
 name = "liebert-dynamic-island"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Lightweight native Rust Dynamic Island notification overlay for Windows and Linux"
@@ -67,7 +67,7 @@ panic = "abort"
 before-packaging-command = "cargo build --release"
 product-name = "Liebert Dynamic Island"
 identifier = "com.liebert.dynamic-island"
-version = "0.1.9"
+version = "0.1.10"
 out-dir = "./target/installer"
 # "nsis" menghasilkan installer .exe, "wix" menghasilkan installer .msi (keduanya mendukung uninstall Windows)
 formats = ["nsis", "wix"]

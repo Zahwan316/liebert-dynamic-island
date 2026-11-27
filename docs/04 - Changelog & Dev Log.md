@@ -10,6 +10,18 @@ tags:
 
 ## 2026-11-27
 
+### Added (v0.1.10)
+
+- `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`, `src/main.rs`, `src/platform/wayland_layer.rs`: Toggle idle **network speed** (`idle_show_network_speed`) di Settings → System; saat aktif, idle pill menampilkan `↓/↑` di samping clock/minimal, dan status baterai tampil di idle (kecuali mode idle Battery) pada Linux dan Windows. Sysmon network diaktifkan otomatis bila toggle idle network aktif.
+
+### Changed (v0.1.10)
+
+- `src/ui/mod.rs`: Margin vertikal expanded dipadatkan (padding idle/expanded, spasi header/separator) untuk menghilangkan kesan ruang kosong di atas header; gutter konten expanded tetap mengikuti lebar arrow side-nav agar panah kiri tidak menimpa konten.
+
+### Fixed (v0.1.10)
+
+- `src/ui/mod.rs`: Konten expanded tidak lagi bertabrakan dengan panah kiri/kanan karena gutter side-nav diterapkan pada rect konten (Linux & Windows).
+
 ### Added (v0.1.9)
 
 - `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambah opsi idle **`Battery`** pada `IdleDisplayMode` (Settings → Idle Display & Clock) untuk menampilkan persentase/status baterai di pill saat idle pada Linux dan Windows; jika tidak ada baterai terdeteksi, pill menampilkan `No battery`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-027).

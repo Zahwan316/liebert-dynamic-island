@@ -708,10 +708,10 @@ pub fn try_run_layer_shell(
     );
     crate::sysmon::spawn_sysmon_worker(
         sysmon_cmd_rx,
-        config.taskbar_monitor_enabled,
+        config.taskbar_monitor_enabled || config.idle_show_network_speed,
         config.taskbar_interval_ms,
         config.taskbar_show_disk,
-        config.taskbar_show_network,
+        config.taskbar_show_network || config.idle_show_network_speed,
         event_tx,
         wake,
     );

@@ -266,6 +266,17 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   3. **Verifikasi (`src/sysmon.rs`):** Test `linux_sampler_reads_live_proc_metrics` menjalankan sampler `/proc` nyata untuk memastikan CPU/RAM terbaca; `cargo test` 67 passed, clippy Linux + Windows-target bersih.
 - **Konsekuensi:** Header Expanded lebih bersih dan navigasi tetap terlihat tanpa mengorbankan tombol Settings. Versi naik ke `v0.1.7`; AppImage/tar.gz dibangun ulang. Utang RAM Settings dari ADR-024 tetap terbuka. Lihat [[01 - Arsitektur & Spesifikasi]], [[02 - Daftar Tugas & Backlog]], dan [[04 - Changelog & Dev Log]].
 
+## ADR-028: Idle Network Speed Toggle & Expanded Header Polish v0.1.10
+- **Tanggal:** 2026-11-27
+- **Status:** Diterima
+- **Konteks:** Pengguna meminta margin atas header expanded dihilangkan/dipadatkan, idle menampilkan baterai (laptop) dan network speed yang bisa di-on/off di Settings, serta ruang kiri/kanan arrow agar tidak menimpa konten (Linux & Windows).
+- **Keputusan:**
+  - Tambah `Config::idle_show_network_speed` (default `false`) dan toggle Settings di grup System. Saat aktif, idle pill menambahkan `↓/↑` dan indikator baterai (jika ada dan bukan mode idle Battery) di samping clock/minimal; sysmon network diaktifkan otomatis bila toggle ini aktif (`src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`, `src/main.rs`, `src/platform/wayland_layer.rs`).
+  - Padding vertikal expanded/idle dipadatkan dan konten expanded tetap memakai inset gutter arrow side-nav agar panah tidak overlap konten (`src/ui/mod.rs`).
+- **Konsekuensi:** Idle lebih informatif tanpa menambah crate; network sampling hanya aktif saat dibutuhkan. `cargo test` 72 passed, clippy bersih.
+
+---
+
 ## ADR-027: Idle Battery Mode & Expanded Layout Polish v0.1.9
 - **Tanggal:** 2026-11-27
 - **Status:** Diterima
