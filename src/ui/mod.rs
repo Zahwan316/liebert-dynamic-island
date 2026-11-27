@@ -2393,6 +2393,68 @@ impl IslandApp {
                 render_dot_label(ui, dot_color, 3.0 * s, job, align);
                 return;
             }
+            IdleDisplayMode::Battery => {
+                if let Some(bat) = self.system_metrics.battery {
+                    let charging = matches!(
+                        bat.status,
+                        crate::battery::BatteryStatus::Charging
+                            | crate::battery::BatteryStatus::Full
+                            | crate::battery::BatteryStatus::PluggedNotCharging
+                    );
+                    let fill = match bat.status {
+                        crate::battery::BatteryStatus::Charging
+                        | crate::battery::BatteryStatus::Full => Color32::from_rgb(80, 210, 145),
+                        _ if bat.percent <= self.config.battery_critical_pct => {
+                            Color32::from_rgb(235, 95, 95)
+                        }
+                        _ if bat.percent <= self.config.battery_warn_pct => {
+                            Color32::from_rgb(245, 185, 85)
+                        }
+                        _ => accent,
+                    };
+                    let mut job = LayoutJob::default();
+                    job.append(
+                        &format!("{}%", bat.percent),
+                        0.0,
+                        TextFormat {
+                            font_id: FontId::monospace(12.0 * s),
+                            color: text_col,
+                            ..Default::default()
+                        },
+                    );
+                    job.append(
+                        &format!(
+                            "  {}",
+                            if charging {
+                                bat.status.label()
+                            } else {
+                                "Battery"
+                            }
+                        ),
+                        0.0,
+                        TextFormat {
+                            font_id: FontId::proportional(9.5 * s),
+                            color: muted,
+                            ..Default::default()
+                        },
+                    );
+                    render_dot_label(ui, fill, 3.0 * s, job, align);
+                } else {
+                    let mut job = LayoutJob::default();
+                    job.append(
+                        "No battery",
+                        0.0,
+                        TextFormat {
+                            font_id: FontId::proportional(11.0 * s),
+                            color: muted,
+                            valign: egui::Align::Center,
+                            ..Default::default()
+                        },
+                    );
+                    render_dot_label(ui, Color32::from_gray(140), 3.0 * s, job, align);
+                }
+                return;
+            }
             _ => {}
         }
 
@@ -2661,73 +2723,71 @@ impl IslandApp {
         if !is_music_card {
             self.music_scroll_focus_key = None;
         }
-        // Reserve the middle-left/middle-right gutters so the chevrons never cover content.
+        // Reserve left/right gutters matching side arrows so content never sits under them.
         let reserve = 26.0 * s;
-        let content_w = (nav_card.width() - reserve * 2.0).max(120.0);
-        let content_h = nav_card.height().max(1.0);
-        ui.add_space(reserve);
-        ui.allocate_ui_with_layout(
-            Vec2::new(content_w, content_h),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                let row_h = 24.0 * s;
-                let right_w = 30.0 * s;
-                let left_w = (ui.available_width() - right_w - 6.0 * s).max(80.0);
-                ui.horizontal(|ui| {
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(left_w, row_h),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.set_clip_rect(ui.max_rect());
-                            ui.label(
-                                RichText::new(self.active_tab.label())
-                                    .font(FontId::proportional(10.5 * s))
-                                    .color(muted),
-                            );
-                        },
-                    );
-                    ui.add_space(6.0 * s);
-                    ui.allocate_ui_with_layout(
-                        Vec2::new(right_w, row_h),
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.set_clip_rect(ui.max_rect());
-                            if icon_button(
-                                ui,
-                                IconKind::Settings,
-                                Vec2::new(26.0 * s, 23.0 * s),
-                                13.0 * s,
-                                muted,
-                                Color32::from_rgba_unmultiplied(255, 255, 255, 16),
-                                CornerRadius::same(10),
-                            )
-                            .on_hover_text("Open Settings")
-                            .clicked()
-                            {
-                                self.open_settings(SettingsTab::Appearance, ctx);
-                            }
-                        },
-                    );
-                });
-                if !is_music_card {
-                    ui.add_space(2.0);
-                    ui.separator();
-                    ui.add_space(2.0);
-                } else {
-                    ui.add_space(6.0);
-                }
-
-                match self.active_tab {
-                    IslandTab::Overview => self.render_overview_tab(ui, now),
-                    IslandTab::Music => self.render_music_tab(ui, ctx, now),
-                    IslandTab::Todo => self.render_todo_tab(ui),
-                    IslandTab::Calendar => self.render_calendar_tab(ui),
-                    IslandTab::Pomodoro => self.render_pomodoro_tab(ui, now),
-                    IslandTab::System => self.render_system_tab(ui, ctx),
-                    IslandTab::Battery => self.render_battery_tab(ui, ctx),
-                }
-            },
+        let content_rect = Rect::from_min_max(
+            Pos2::new(nav_card.min.x + reserve, nav_card.min.y),
+            Pos2::new((nav_card.max.x - reserve).max(nav_card.min.x + reserve), nav_card.max.y),
         );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+            ui.set_clip_rect(content_rect);
+            let row_h = 24.0 * s;
+            let right_w = 30.0 * s;
+            let left_w = (ui.available_width() - right_w - 6.0 * s).max(80.0);
+            ui.horizontal(|ui| {
+                ui.allocate_ui_with_layout(
+                    Vec2::new(left_w, row_h),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.set_clip_rect(ui.max_rect());
+                        ui.label(
+                            RichText::new(self.active_tab.label())
+                                .font(FontId::proportional(10.5 * s))
+                                .color(muted),
+                        );
+                    },
+                );
+                ui.add_space(6.0 * s);
+                ui.allocate_ui_with_layout(
+                    Vec2::new(right_w, row_h),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        ui.set_clip_rect(ui.max_rect());
+                        if icon_button(
+                            ui,
+                            IconKind::Settings,
+                            Vec2::new(26.0 * s, 23.0 * s),
+                            13.0 * s,
+                            muted,
+                            Color32::from_rgba_unmultiplied(255, 255, 255, 16),
+                            CornerRadius::same(10),
+                        )
+                        .on_hover_text("Open Settings")
+                        .clicked()
+                        {
+                            self.open_settings(SettingsTab::Appearance, ctx);
+                        }
+                    },
+                );
+            });
+            if !is_music_card {
+                ui.add_space(2.0);
+                ui.separator();
+                ui.add_space(2.0);
+            } else {
+                ui.add_space(4.0);
+            }
+
+            match self.active_tab {
+                IslandTab::Overview => self.render_overview_tab(ui, now),
+                IslandTab::Music => self.render_music_tab(ui, ctx, now),
+                IslandTab::Todo => self.render_todo_tab(ui),
+                IslandTab::Calendar => self.render_calendar_tab(ui),
+                IslandTab::Pomodoro => self.render_pomodoro_tab(ui, now),
+                IslandTab::System => self.render_system_tab(ui, ctx),
+                IslandTab::Battery => self.render_battery_tab(ui, ctx),
+            }
+        });
         self.draw_side_nav(ui, ctx, nav_card);
     }
 
@@ -2776,54 +2836,30 @@ impl IslandApp {
         let align = self.text_align();
         let s = self.config.scale;
 
-        let (time_str, tz_label) = format_clock(
+        let (time_str, _) = format_clock(
             chrono::Utc::now(),
             &self.config.clock_timezone,
             self.config.clock_24h,
             self.config.clock_show_seconds,
         );
         let row_w = ui.available_width();
-        let time_font = FontId::monospace(15.0 * s);
-        let tz_font = FontId::proportional(9.5 * s);
-        let gap = 6.0 * s;
-        let time_w = ui
-            .painter()
-            .layout_no_wrap(time_str.clone(), time_font.clone(), text_col)
-            .size()
-            .x;
-        let tz_badge_w = ui
-            .painter()
-            .layout_no_wrap(tz_label.clone(), tz_font.clone(), muted)
-            .size()
-            .x
-            + 12.0;
-        let lead = (row_w - (time_w + gap + tz_badge_w)).max(0.0) * 0.5;
+        let time_font = FontId::monospace(13.5 * s);
         ui.allocate_ui_with_layout(
-            Vec2::new(row_w, 20.0 * s),
+            Vec2::new(row_w, 18.0 * s),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
+                let time_w = ui
+                    .painter()
+                    .layout_no_wrap(time_str.clone(), time_font.clone(), text_col)
+                    .size()
+                    .x;
+                let lead = (row_w - time_w).max(0.0) * 0.5;
                 if lead > 0.5 {
                     ui.add_space(lead);
                 }
-                ui.label(
-                    RichText::new(time_str)
-                        .font(time_font)
-                        .color(text_col)
-                        .strong(),
-                );
-                ui.add_space(gap);
-                egui::Frame::new()
-                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 16))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(egui::Margin::symmetric(6, 2))
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(tz_label).font(tz_font).color(muted));
-                    });
+                ui.label(RichText::new(time_str).font(time_font).color(text_col));
             },
         );
-        ui.add_space(6.0 * s);
-        ui.separator();
         ui.add_space(4.0 * s);
 
         if self.config.show_lyrics {
@@ -2835,19 +2871,15 @@ impl IslandApp {
                         KaraokeLyricMode::Translate => k.translation.unwrap_or(k.text),
                         KaraokeLyricMode::Original => k.text,
                     })
-                    .unwrap_or("No synced lyric");
-                if render_overview_row(
-                    ui,
-                    IconKind::MusicNote,
-                    &format!("{} — {}", track.title, lyric),
-                    accent,
-                    s,
-                    align,
-                    true,
-                ) {
+                    .unwrap_or(&track.title);
+                let line = if lyric == track.title {
+                    format!("{} — {}", track.title, track.artist)
+                } else {
+                    lyric.to_owned()
+                };
+                if render_overview_row(ui, IconKind::MusicNote, &line, accent, s, align, true) {
                     self.active_tab = IslandTab::Music;
                 }
-                ui.add_space(4.0 * s);
             } else {
                 render_overview_row(
                     ui,
@@ -2858,8 +2890,8 @@ impl IslandApp {
                     align,
                     false,
                 );
-                ui.add_space(2.0 * s);
             }
+            ui.add_space(2.0 * s);
         }
 
         if self.config.show_calendar {
@@ -2867,12 +2899,12 @@ impl IslandApp {
             let next = upcoming_events(&self.calendar_events, now_utc, 1);
             let cal_text = if let Some(ev) = next.first() {
                 format!(
-                    "{} ({})",
+                    "{} · {}",
                     ev.summary,
                     format_countdown(ev.start_utc, ev.end_utc, now_utc)
                 )
             } else if self.config.google_calendar_ics_url.is_empty() {
-                "Connect Google Calendar in Settings".to_owned()
+                "Connect calendar".to_owned()
             } else {
                 "No upcoming events".to_owned()
             };
@@ -2887,7 +2919,7 @@ impl IslandApp {
             if render_overview_row(
                 ui,
                 IconKind::TodoCheck,
-                &format!("{pending} pending task(s)"),
+                &format!("{pending} pending"),
                 muted,
                 s,
                 align,
@@ -2899,15 +2931,12 @@ impl IslandApp {
         }
 
         if self.config.show_pomodoro {
-            let status = if self.pomodoro.running {
-                "Running"
-            } else {
-                "Paused"
-            };
+            let status = if self.pomodoro.running { "•" } else { "⏸" };
             let pom_text = format!(
-                "{} • {} ({status})",
-                self.pomodoro.phase.label(),
-                self.pomodoro.format_mm_ss()
+                "{} {} {}",
+                self.pomodoro.phase.short_label(),
+                self.pomodoro.format_mm_ss(),
+                status
             );
             if render_overview_row(ui, IconKind::Timer, &pom_text, text_col, s, align, true) {
                 self.active_tab = IslandTab::Pomodoro;
@@ -2918,10 +2947,10 @@ impl IslandApp {
         let bat_part = self
             .system_metrics
             .battery
-            .map(|b| format!(" • {} {}%", b.status.short_symbol(), b.percent))
+            .map(|b| format!(" · BAT {}%", b.percent))
             .unwrap_or_default();
         let sys_text = format!(
-            "CPU {:.0}% • RAM {:.0}%{}",
+            "CPU {:.0}% · RAM {:.0}%{}",
             self.system_metrics.cpu_pct, self.system_metrics.ram_pct, bat_part
         );
         if render_overview_row(ui, IconKind::Settings, &sys_text, muted, s, align, true) {

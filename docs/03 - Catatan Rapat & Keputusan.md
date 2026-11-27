@@ -266,6 +266,15 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   3. **Verifikasi (`src/sysmon.rs`):** Test `linux_sampler_reads_live_proc_metrics` menjalankan sampler `/proc` nyata untuk memastikan CPU/RAM terbaca; `cargo test` 67 passed, clippy Linux + Windows-target bersih.
 - **Konsekuensi:** Header Expanded lebih bersih dan navigasi tetap terlihat tanpa mengorbankan tombol Settings. Versi naik ke `v0.1.7`; AppImage/tar.gz dibangun ulang. Utang RAM Settings dari ADR-024 tetap terbuka. Lihat [[01 - Arsitektur & Spesifikasi]], [[02 - Daftar Tugas & Backlog]], dan [[04 - Changelog & Dev Log]].
 
+## ADR-027: Idle Battery Mode & Expanded Layout Polish v0.1.9
+- **Tanggal:** 2026-11-27
+- **Status:** Diterima
+- **Konteks:** Pengguna melaporkan ruang kosong di atas konten expanded (terutama sekitar arrow kiri/kanan), meminta tab Home lebih minimalis, dan meminta opsi tampilan idle berupa status baterai di Linux dan Windows.
+- **Keputusan:**
+  - `IdleDisplayMode::Battery` ditambahkan ke config/settings dan dirender di idle pill memakai `SystemMetrics.battery` dari sysmon (Linux sysfs + Windows Win32), dengan fallback `No battery` bila perangkat tidak punya baterai (`src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`).
+  - Konten expanded ditempatkan dalam `content_rect` yang di-inset sebesar gutter arrow side-nav (`26*s`) agar tidak tertutup panah/ada ruang kosong di tepi kartu; header tetap minimal (label tab + Settings) dan Home diringkas.
+- **Konsekuensi:** UX expanded lebih rapi dan mode idle battery tersedia lintas OS. `cargo test` 72 passed, clippy bersih. Tidak ada crate baru.
+
 ---
 
 ## ADR-026: Autostart, Tab Battery, Chart Donut, Monitor Pasif D-Bus & Batas RAM v0.1.8

@@ -801,6 +801,7 @@ fn render_display_tab(
                 IdleDisplayMode::Lyrics,
                 IdleDisplayMode::NextEvent,
                 IdleDisplayMode::Pomodoro,
+                IdleDisplayMode::Battery,
                 IdleDisplayMode::Minimal,
             ] {
                 if ui

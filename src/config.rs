@@ -12,6 +12,7 @@ pub enum IdleDisplayMode {
     Lyrics,
     NextEvent,
     Pomodoro,
+    Battery,
     Minimal,
 }
 
@@ -23,6 +24,7 @@ impl IdleDisplayMode {
             Self::Lyrics => "Lyrics / Now Playing",
             Self::NextEvent => "Next Calendar Event",
             Self::Pomodoro => "Pomodoro Timer",
+            Self::Battery => "Battery",
             Self::Minimal => "Minimal Dot",
         }
     }

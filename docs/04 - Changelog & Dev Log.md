@@ -10,6 +10,18 @@ tags:
 
 ## 2026-11-27
 
+### Added (v0.1.9)
+
+- `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambah opsi idle **`Battery`** pada `IdleDisplayMode` (Settings → Idle Display & Clock) untuk menampilkan persentase/status baterai di pill saat idle pada Linux dan Windows; jika tidak ada baterai terdeteksi, pill menampilkan `No battery`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-027).
+
+### Changed (v0.1.9)
+
+- `src/ui/mod.rs`: Layout expanded diberi gutter kiri/kanan mengikuti lebar tombol arrow side-nav sehingga konten tidak lagi tertutup panah; header tab dirapikan (label + settings), dan tab **Home** dibuat lebih minimalis (jam ringkas, baris info lebih padat). Lihat [[01 - Arsitektur & Spesifikasi]].
+
+### Fixed (v0.1.9)
+
+- `src/ui/mod.rs`: Memperbaiki ruang kosong atas pada konten expanded dengan menyelaraskan inset konten ke rect kartu dan gutter arrow (both).
+
 ### Added (v0.1.8)
 
 - `src/config.rs`, `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/linux.rs`, `src/ui/settings.rs`, `src/daemon.rs`, `src/ui/mod.rs`: **Autostart "Start with OS"** untuk Windows **dan** Linux, tanpa Administrator/root. Windows menulis/ Menghapus nilai HKCU `...\CurrentVersion\Run\LiebertDynamicIsland` memakai API registry `windows 0.62` (`Win32_System_Registry` ditambahkan ke `Cargo.toml`); Linux menulis/menghapus `~/.config/autostart/liebert-dynamic-island.desktop` dengan `Exec` sadar `APPIMAGE` (path AppImage persisten, bukan mount AppDir sementara). Toggle ada di Settings → System → **Startup** dan hanya diterapkan saat nilainya berubah (jalur Settings mandiri, Settings inline, dan `UiToDaemon::ConfigSaved`). `installer/windows/installer.nsi`: uninstaller kini menghapus nilai Run tersebut agar tidak ada entri autostart yatim. Test murni: `windows_autostart_command_quotes_paths_with_spaces`, `desktop_autostart_entry_has_required_keys`, `desktop_exec_escapes_shell_metacharacters`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-026).
