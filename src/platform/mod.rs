@@ -267,6 +267,43 @@ pub fn run_notification_spike() -> Result<String, String> {
     Err("Notification spike is only supported on Windows and Linux".to_owned())
 }
 
+/// Enable or disable per-user start-with-OS. Never requires Administrator/root.
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    return windows::set_autostart(enabled);
+
+    #[cfg(target_os = "linux")]
+    return linux::set_autostart(enabled);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = enabled;
+        Err("Autostart is only supported on Windows and Linux".to_owned())
+    }
+}
+
+/// Windows Run values must quote the executable path; keep this pure for unit tests.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_autostart_command(exe: &std::path::Path) -> String {
+    format!("\"{}\"", exe.to_string_lossy())
+}
+
+/// XDG autostart entry. `exec` is already escaped/quoted by the caller.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn desktop_autostart_entry(exec: &str) -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=Liebert Dynamic Island\n\
+         Comment=Lightweight native Rust Dynamic Island notification overlay\n\
+         Exec={exec}\n\
+         Icon=liebert-dynamic-island\n\
+         Terminal=false\n\
+         StartupNotify=false\n\
+         X-GNOME-Autostart-enabled=true\n"
+    )
+}
+
 #[cfg_attr(windows, allow(dead_code))]
 pub fn overlay_resizable() -> bool {
     #[cfg(target_os = "linux")]
@@ -378,7 +415,14 @@ pub fn sync_overlay_window(
     notch_dock_mode: bool,
 ) {
     #[cfg(windows)]
-    windows::sync_overlay_window(window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
+    windows::sync_overlay_window(
+        window_title,
+        x_logical,
+        y_logical,
+        w_logical,
+        h_logical,
+        notch_dock_mode,
+    );
 
     #[cfg(target_os = "linux")]
     linux::sync_overlay_window(
@@ -391,7 +435,14 @@ pub fn sync_overlay_window(
     );
 
     #[cfg(not(any(windows, target_os = "linux")))]
-    let _ = (window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
+    let _ = (
+        window_title,
+        x_logical,
+        y_logical,
+        w_logical,
+        h_logical,
+        notch_dock_mode,
+    );
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -596,6 +647,25 @@ mod tests {
 
         let gray = [180, 180, 180, 255].repeat(32);
         assert_eq!(extract_dominant_accent(&gray), None);
+    }
+
+    #[test]
+    fn windows_autostart_command_quotes_paths_with_spaces() {
+        let cmd = windows_autostart_command(std::path::Path::new(
+            r"C:\Program Files\Liebert\liebert-dynamic-island.exe",
+        ));
+        assert_eq!(
+            cmd,
+            r#""C:\Program Files\Liebert\liebert-dynamic-island.exe""#
+        );
+    }
+
+    #[test]
+    fn desktop_autostart_entry_has_required_keys() {
+        let entry = desktop_autostart_entry("\"/opt/My Apps/liebert\"");
+        assert!(entry.contains("[Desktop Entry]\n"));
+        assert!(entry.contains("Exec=\"/opt/My Apps/liebert\"\n"));
+        assert!(entry.contains("X-GNOME-Autostart-enabled=true\n"));
     }
 
     #[test]

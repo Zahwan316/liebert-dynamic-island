@@ -135,9 +135,7 @@ impl DaemonState {
     }
 
     fn is_hidden_by_fullscreen(&self) -> bool {
-        self.state.hide_in_fullscreen
-            && self.state.fullscreen_active
-            && self.state.active.is_none()
+        self.state.hide_in_fullscreen && self.state.fullscreen_active && self.state.active.is_none()
     }
 
     fn should_spawn_ui(&self, now: Instant) -> bool {
@@ -343,8 +341,7 @@ pub fn run_daemon(demo_mode: bool) -> ExitCode {
                     daemon.fullscreen_exclusive = exclusive;
                     daemon.fullscreen_windowed = windowed;
                     let fs = daemon.config.hide_in_fullscreen
-                        && (exclusive
-                            || (daemon.config.hide_in_windowed_fullscreen && windowed));
+                        && (exclusive || (daemon.config.hide_in_windowed_fullscreen && windowed));
                     daemon.state.set_fullscreen_active(fs);
                     daemon.send_to_ui(&DaemonToUi::Fullscreen(exclusive, windowed));
                 }
@@ -418,19 +415,20 @@ pub fn run_daemon(demo_mode: bool) -> ExitCode {
                 }
                 UiToDaemon::ConfigSaved(cfg) => {
                     let prev_url = daemon.config.google_calendar_ics_url.clone();
+                    let prev_autostart = daemon.config.start_with_os;
                     daemon.config = cfg;
                     daemon
                         .state
                         .set_auto_hide(daemon.config.auto_hide_when_idle, now);
-                    daemon
-                        .state
-                        .set_auto_hide_delay(Duration::from_secs(daemon.config.auto_hide_delay_secs));
+                    daemon.state.set_auto_hide_delay(Duration::from_secs(
+                        daemon.config.auto_hide_delay_secs,
+                    ));
                     daemon
                         .state
                         .set_hide_in_fullscreen(daemon.config.hide_in_fullscreen);
-                    daemon
-                        .state
-                        .set_collapse_timeout(Duration::from_secs(daemon.config.collapse_timeout_secs));
+                    daemon.state.set_collapse_timeout(Duration::from_secs(
+                        daemon.config.collapse_timeout_secs,
+                    ));
                     daemon.sync_tray();
                     if daemon.config.google_calendar_ics_url != prev_url {
                         let _ = calendar_cmd_tx.send(CalendarCommand::SetUrl(
@@ -439,6 +437,12 @@ pub fn run_daemon(demo_mode: bool) -> ExitCode {
                     }
                     if let Err(err) = daemon.config.save() {
                         eprintln!("Failed to save config from UI: {err}");
+                    }
+                    if daemon.config.start_with_os != prev_autostart
+                        && let Err(err) =
+                            crate::platform::set_autostart(daemon.config.start_with_os)
+                    {
+                        eprintln!("Failed to apply autostart setting: {err}");
                     }
                 }
                 UiToDaemon::DismissNotification => {

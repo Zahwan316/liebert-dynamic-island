@@ -39,10 +39,7 @@ pub fn format_speed_bps(bps: u64) -> String {
 }
 
 #[allow(dead_code)]
-pub fn compute_cpu_delta(
-    prev: (u64, u64, u64),
-    curr: (u64, u64, u64),
-) -> f32 {
+pub fn compute_cpu_delta(prev: (u64, u64, u64), curr: (u64, u64, u64)) -> f32 {
     let d_idle = curr.0.saturating_sub(prev.0);
     let d_kernel = curr.1.saturating_sub(prev.1);
     let d_user = curr.2.saturating_sub(prev.2);
@@ -373,8 +370,7 @@ mod imp {
                     let now = Instant::now();
                     if let Some((prev_rx, prev_tx, prev_at)) = self.prev_net {
                         let elapsed = now.duration_since(prev_at).as_secs_f64().max(0.001);
-                        out.net_down_bps =
-                            (rx.saturating_sub(prev_rx) as f64 / elapsed) as u64;
+                        out.net_down_bps = (rx.saturating_sub(prev_rx) as f64 / elapsed) as u64;
                         out.net_up_bps = (tx.saturating_sub(prev_tx) as f64 / elapsed) as u64;
                     }
                     self.prev_net = Some((rx, tx, now));
@@ -441,21 +437,69 @@ mod imp {
             }
         }
         let total = total?;
-        let avail = available.or_else(|| {
-            Some(free? + buffers.unwrap_or(0) + cached.unwrap_or(0))
-        })?;
+        let avail =
+            available.or_else(|| Some(free? + buffers.unwrap_or(0) + cached.unwrap_or(0)))?;
         Some((total, avail.min(total)))
     }
 
+    /// Aggregate all mounted real filesystems instead of only `/`, so separate `/home`,
+    /// `/var` and other system folders are included in the usage percentage.
     fn disk_capacity_pct() -> Option<f32> {
         let out = std::process::Command::new("df")
-            .args(["-P", "-k", "/"])
+            .args(["-P", "-k"])
             .output()
             .ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
-        let cols = text.lines().nth(1)?.split_whitespace().collect::<Vec<_>>();
-        let capacity = cols.get(4)?.trim_end_matches('%').parse::<f32>().ok()?;
-        Some(capacity.clamp(0.0, 100.0))
+        parse_df_capacity(&text)
+    }
+
+    pub(crate) fn parse_df_capacity(text: &str) -> Option<f32> {
+        let mut total_kb = 0_u64;
+        let mut used_kb = 0_u64;
+        let mut found = false;
+        for line in text.lines().skip(1) {
+            let cols = line.split_whitespace().collect::<Vec<_>>();
+            if cols.len() < 6 {
+                continue;
+            }
+            let fs = cols[0];
+            // Pseudo filesystems have no backing storage and would skew a whole-system total.
+            if [
+                "tmpfs",
+                "devtmpfs",
+                "proc",
+                "sysfs",
+                "devpts",
+                "cgroup",
+                "cgroup2",
+                "mqueue",
+                "hugetlbfs",
+                "securityfs",
+                "pstore",
+                "debugfs",
+                "tracefs",
+                "bpf",
+                "configfs",
+                "fusectl",
+            ]
+            .contains(&fs)
+            {
+                continue;
+            }
+            let Some(total) = cols[1].parse::<u64>().ok() else {
+                continue;
+            };
+            let Some(used) = cols[2].parse::<u64>().ok() else {
+                continue;
+            };
+            total_kb = total_kb.saturating_add(total);
+            used_kb = used_kb.saturating_add(used);
+            found = true;
+        }
+        if !found || total_kb == 0 {
+            return None;
+        }
+        Some((used_kb as f32 / total_kb as f32 * 100.0).clamp(0.0, 100.0))
     }
 
     fn disk_io_ticks() -> Option<(u64, u64)> {
@@ -488,7 +532,9 @@ mod imp {
         let mut tx = 0_u64;
         let mut found = false;
         for line in text.lines().skip(2) {
-            let Some((name, rest)) = line.split_once(':') else { continue };
+            let Some((name, rest)) = line.split_once(':') else {
+                continue;
+            };
             if name.trim() == "lo" {
                 continue;
             }
@@ -533,6 +579,17 @@ mod imp {
             assert!(metrics.ram_total_gb > 0.0);
             assert!(metrics.ram_pct.is_finite());
             assert!(metrics.cpu_pct.is_finite());
+        }
+
+        #[test]
+        fn linux_df_capacity_aggregates_system_mounts_and_skips_pseudo_filesystems() {
+            // Shortened POSIX `df -P -k` output: root plus a separate /home mount.
+            let text = "Filesystem 1024-blocks Used Available Capacity Mounted on\n\
+                        /dev/sda1 100000 40000 60000 40% /\n\
+                        tmpfs 10000 8000 2000 80% /dev/shm\n\
+                        /dev/sdb1 200000 100000 100000 50% /home\n";
+            let pct = super::parse_df_capacity(text).expect("capacity");
+            assert!((pct - 46.666_668).abs() < 0.01, "unexpected {pct}");
         }
     }
 }
@@ -579,7 +636,10 @@ pub fn spawn_sysmon_worker(
             loop {
                 if enabled {
                     let metrics = sampler.sample(collect_disk, collect_net);
-                    if event_tx.send(PlatformEvent::SystemMetrics(metrics)).is_err() {
+                    if event_tx
+                        .send(PlatformEvent::SystemMetrics(metrics))
+                        .is_err()
+                    {
                         break;
                     }
                     on_wake();
@@ -589,7 +649,10 @@ pub fn spawn_sysmon_worker(
                         battery: read_battery(),
                         ..Default::default()
                     };
-                    if event_tx.send(PlatformEvent::SystemMetrics(metrics)).is_err() {
+                    if event_tx
+                        .send(PlatformEvent::SystemMetrics(metrics))
+                        .is_err()
+                    {
                         break;
                     }
                     on_wake();

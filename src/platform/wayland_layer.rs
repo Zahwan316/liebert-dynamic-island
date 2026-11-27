@@ -103,7 +103,9 @@ impl WaylandState {
         layer.set_margin(margin_top, 0, 0, 0);
         layer.set_size(width.max(1), height.max(1));
         if !visible && let Some(region) = &self.empty_region {
-            layer.wl_surface().set_input_region(Some(region.wl_region()));
+            layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
         }
         layer.commit();
 
@@ -233,11 +235,7 @@ impl ShmHandler for WaylandState {
 
 impl LayerShellHandler for WaylandState {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
-        if self
-            .layer
-            .as_ref()
-            .is_some_and(|active| active == layer)
-        {
+        if self.layer.as_ref().is_some_and(|active| active == layer) {
             self.layer = None;
             self.configured = false;
             self.surface_closed = true;
@@ -258,11 +256,7 @@ impl LayerShellHandler for WaylandState {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        if self
-            .layer
-            .as_ref()
-            .is_some_and(|active| active == layer)
-        {
+        if self.layer.as_ref().is_some_and(|active| active == layer) {
             if configure.new_size.0 > 0 {
                 self.logical_width = configure.new_size.0;
             }
@@ -604,18 +598,17 @@ pub fn try_run_layer_shell(
     initial_h: f32,
     initial_y: f32,
 ) -> Result<(), String> {
-    let conn = Connection::connect_to_env()
-        .map_err(|e| format!("Wayland connection unavailable: {e}"))?;
+    let conn =
+        Connection::connect_to_env().map_err(|e| format!("Wayland connection unavailable: {e}"))?;
     let (globals, mut event_queue) =
         registry_queue_init(&conn).map_err(|e| format!("Wayland registry init failed: {e}"))?;
     let qh = event_queue.handle();
 
     let compositor = CompositorState::bind(&globals, &qh)
         .map_err(|e| format!("wl_compositor unavailable: {e}"))?;
-    let layer_shell = LayerShell::bind(&globals, &qh)
-        .map_err(|e| format!("wlr-layer-shell unavailable: {e}"))?;
-    let shm_state =
-        Shm::bind(&globals, &qh).map_err(|e| format!("wl_shm unavailable: {e}"))?;
+    let layer_shell =
+        LayerShell::bind(&globals, &qh).map_err(|e| format!("wlr-layer-shell unavailable: {e}"))?;
+    let shm_state = Shm::bind(&globals, &qh).map_err(|e| format!("wl_shm unavailable: {e}"))?;
 
     linux::prepare_layer_shell_rules(LAYER_NAMESPACE);
 
@@ -647,7 +640,13 @@ pub fn try_run_layer_shell(
         last_pointer_pos: Pos2::ZERO,
         pending_events: Vec::new(),
     };
-    wl_state.create_layer_surface(&qh, init_w, init_h, init_margin_top, !config.auto_hide_when_idle);
+    wl_state.create_layer_surface(
+        &qh,
+        init_w,
+        init_h,
+        init_margin_top,
+        !config.auto_hide_when_idle,
+    );
 
     let startup_deadline = Instant::now() + Duration::from_secs(2);
     while !wl_state.configured && Instant::now() < startup_deadline {
@@ -867,9 +866,7 @@ pub fn try_run_layer_shell(
                 if committed_scale != 1 {
                     wl_surface.set_buffer_scale(1);
                 }
-                if let Ok((buffer, bytes)) =
-                    pool.create_buffer(1, 1, 4, wl_shm::Format::Argb8888)
-                {
+                if let Ok((buffer, bytes)) = pool.create_buffer(1, 1, 4, wl_shm::Format::Argb8888) {
                     bytes[..4].fill(0);
                     let _ = buffer.attach_to(wl_surface);
                     wl_surface.damage_buffer(0, 0, 1, 1);
@@ -908,7 +905,13 @@ pub fn try_run_layer_shell(
             || want_margin_top != committed_margin_top
             || cur_scale != committed_scale;
 
-        if !state_changed && !should_draw(wl_state.needs_redraw, step.repaint_after, last_draw.elapsed()) {
+        if !state_changed
+            && !should_draw(
+                wl_state.needs_redraw,
+                step.repaint_after,
+                last_draw.elapsed(),
+            )
+        {
             if event_loop
                 .dispatch(Some(Duration::from_millis(20)), &mut wl_state)
                 .is_err()

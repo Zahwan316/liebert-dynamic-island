@@ -15,12 +15,12 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 ### Fase 1: Setup Proyek & Technical Spike
 - [x] Inisialisasi `Cargo.toml` dan skeleton modul (`src/main.rs`, `src/config.rs`, `src/state.rs`, `src/tray.rs`, `src/ui/`, `src/platform/`)
 - [x] Spike Windows: uji `UserNotificationListener::Current()` pada `.exe` unpackaged vs Sparse Package/MSIX manifest *(lulus di `.exe` unpackaged: `Access: Allowed`, `21` active toasts terbaca)*
-- [ ] Spike Linux: uji D-Bus `org.freedesktop.Notifications` (`zbus`) & overlay `wlr-layer-shell` (Wayland) / dock (X11) di environment Linux *(koneksi D-Bus sesi lolos via `--spike-notifications`, dan overlay Hyprland Wayland + `ksni` tray terverifikasi live; klaim nama `org.freedesktop.Notifications` masih menunggu daemon incumbent dihentikan)*
+- [ ] Spike Linux: uji D-Bus `org.freedesktop.Notifications` (`zbus`) & overlay `wlr-layer-shell` (Wayland) / dock (X11) di environment Linux *(koneksi D-Bus sesi lolos via `--spike-notifications`, dan overlay Hyprland Wayland + `ksni` tray terverifikasi live; sejak v0.1.8 fallback monitor pasif aktif bila nama dipegang daemon lain, tetapi uji notifikasi nyata end-to-end masih pending)*
 - [x] Finalisasi pilihan renderer Rust (`eframe 0.37` + `Renderer::Glow`) di [[03 - Catatan Rapat & Keputusan]]
 
 ### Fase 2: Core Features
 - [x] Definisikan `NotificationItem`, state machine (`Idle` ↔ `Compact` ↔ `Expanded`), dan queue sederhana di `src/state.rs`
-- [ ] Implementasikan bridge Windows WinRT & Linux D-Bus beserta error handling izin/daemon *(Windows terimplementasi & lolos spike; Linux `src/platform/linux.rs` kini lolos build release & spike D-Bus, runtime listener belum diverifikasi karena konflik daemon aktif)*
+- [ ] Implementasikan bridge Windows WinRT & Linux D-Bus beserta error handling izin/daemon *(Windows terimplementasi & lolos spike; Linux `src/platform/linux.rs` kini lolos build release & spike D-Bus, dengan fallback monitor pasif saat daemon lain aktif; verifikasi runtime dengan notifikasi nyata masih pending)*
 - [x] Implementasikan System Tray (`Pause/Resume`, `Auto-hide when idle`, `Exit`) dan persistensi `config.toml` (`%APPDATA%` / `~/.config`)
 
 ### Fase 3: UI & Animation
@@ -31,7 +31,7 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 ### Fase 4: Testing & Release
 - [x] Tambahkan unit test state machine, config, clock, lyrics, todo, calendar, pomodoro, album accent, fullscreen rect, & text truncation (`cargo test` — 35 tests passed)
 - [ ] Uji manual edge cases: multi-notifikasi berurutan, teks panjang/Unicode, multi-DPI scaling, hover expand live, top-edge hover reveal saat auto-hide, Spotify lyrics, & Google Calendar `.ics`
-- [ ] Verifikasi target performa `--release`: RAM idle `< 25 MB`, CPU idle `< 0.5%`, latency `< 150 ms` *(v0.1.7: RSS Wayland `23,2 MB`, Settings `102,8 MB` dengan driver NVIDIA; target idle `< 10 MB`, Settings `< 10 MB`, dan fallback X11 `< 30 MB` masih terbuka)*
+- [ ] Verifikasi target performa `--release`: RAM idle `< 10 MB` (target yang diminta pengguna), CPU idle `< 0.5%`, latency `< 150 ms` *(v0.1.8: RSS Wayland/`--demo` `63,1 MB`, `Pss 59,0 MB`; Settings `102,8 MB` pada host NVIDIA; target `< 10 MB` dan fallback X11 `< 30 MB` **masih terbuka**, lihat ADR-026)*
 - [x] Perbarui `README.md` (cara build, izin Windows, catatan daemon Linux) & lakukan smoke test binary Windows + Linux *(README.md diperbarui sesuai kode aktual; smoke test Linux masih pending)*
 - [x] **Paket rilis v0.1.0:** AppImage + tar.gz Linux dibangun lokal; `PKGBUILD`/`.SRCINFO` AUR, skrip NSIS Windows, dan workflow GitHub Actions disiapkan untuk publikasi aset saat tag `v*` (installer Windows dibangun di CI; submit AUR masih membutuhkan akun maintainer)
 
@@ -65,7 +65,9 @@ Referensi cakupan fitur: [[PRD-LiebertDynamicIsland-MVP]].
 - [x] **Perbaikan Arrow/Vektor, Kembali ke Layout Music Lama, Fetch Cover Linux & RAM Settings v0.1.6:** Chevron kiri/kanan kini tombol vektor yang selalu tampil, layout Music expanded dikembalikan, batas decode cover `2048 px`/`16 MiB` + cache tekstur berbasis hash konten, dan launcher Settings mencoba software GL sebelum fallback. `cargo test` 66 passed + clippy Linux/Windows bersih. Catatan: jendela Settings `VmRSS 102,8 MB` pada host NVIDIA — target `< 10 MB` belum tercapai. Lihat [[04 - Changelog & Dev Log]] (ADR-024).
 - [x] **Header Expanded Only Label + Settings & Side Arrows, Battery "No battery detected" v0.1.7:** Tab strip/chevron header/toggle mode dihapus; chevron dipindah ke tengah tepi kartu. Settings tetap grup kiri/konten kanan. Sampler `/proc` Linux diuji live dan status baterai eksplisit saat perangkat tidak ada. `cargo test` 67 passed + clippy Linux/Windows bersih. Lihat [[04 - Changelog & Dev Log]] (ADR-025).
 - [x] **Installer Windows v0.1.7 dibangun dari host Linux:** Docker `rust:slim` + `gcc-mingw-w64-x86-64` + `nsis` menghasilkan `dist/liebert-dynamic-island-windows-x86_64-setup.exe` dan `.zip`; `makensis` di Linux memakai `-D` (bukan `/D`). Artefak diverifikasi dengan `file` + `7z l`; README mendapat perintah lengkapnya.
-- [ ] **Launch at Startup & Multi-Monitor Picker:** Toggle autostart OS dan pilihan monitor target di Settings
+- [x] **Autostart, Tab Battery, Donut Chart, Settings Bergrup & Notifikasi Linux v0.1.8:** Toggle autostart per-user (Windows HKCU Run + Linux XDG `.desktop` sadar `APPIMAGE`); tab Battery dengan animasi charging + `No battery detected`; donut chart CPU/RAM/Disk; inset arrow expanded; Home/Tasks dirapikan; panel Settings bergrup; disk Linux diagregasi lintas mount; fallback monitor pasif D-Bus. `cargo test` 72 passed, clippy Linux + Windows-target bersih, artefak v0.1.8 dibangun. Target RAM `< 10 MB` belum tercapai. Lihat [[04 - Changelog & Dev Log]] (ADR-026).
+- [x] **Launch at Startup (v0.1.8):** Toggle autostart OS di Settings → System → Startup, diterapkan hanya saat nilai berubah (Windows HKCU Run / Linux XDG autostart), tanpa Administrator/root
+- [ ] **Multi-Monitor Picker:** Pilihan monitor target di Settings
 - [ ] **System HUD (Volume & Brightness):** Bar indikator custom saat volume atau brightness berubah
 - [ ] **Click-to-Focus App:** Klik notifikasi untuk memfokuskan aplikasi pengirimnya
 - [ ] **Quick Drop / Clipboard Shelf:** Area drag-and-drop sementara untuk file atau teks antar window

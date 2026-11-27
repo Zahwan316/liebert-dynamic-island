@@ -138,6 +138,8 @@ pub struct Config {
     pub show_todo: bool,
     pub show_calendar: bool,
     pub show_pomodoro: bool,
+    pub show_battery: bool,
+    pub start_with_os: bool,
     pub pomodoro_focus_mins: u64,
     pub pomodoro_short_break_mins: u64,
     pub pomodoro_long_break_mins: u64,
@@ -194,6 +196,8 @@ impl Default for Config {
             show_todo: true,
             show_calendar: true,
             show_pomodoro: true,
+            show_battery: true,
+            start_with_os: false,
             pomodoro_focus_mins: 25,
             pomodoro_short_break_mins: 5,
             pomodoro_long_break_mins: 15,
@@ -245,7 +249,10 @@ impl Config {
         cfg.pomodoro_long_break_mins = cfg.pomodoro_long_break_mins.clamp(1, 90);
         cfg.taskbar_interval_ms = cfg.taskbar_interval_ms.clamp(500, 5000);
         cfg.battery_warn_pct = cfg.battery_warn_pct.clamp(5, 50);
-        cfg.battery_critical_pct = cfg.battery_critical_pct.clamp(3, 30).min(cfg.battery_warn_pct);
+        cfg.battery_critical_pct = cfg
+            .battery_critical_pct
+            .clamp(3, 30)
+            .min(cfg.battery_warn_pct);
         cfg
     }
 
@@ -314,9 +321,7 @@ mod tests {
         assert_eq!(cfg.idle_display, IdleDisplayMode::Auto);
         assert_eq!(cfg.clock_timezone, "Local");
         assert!(cfg.show_notifications && cfg.show_lyrics && cfg.show_todo && cfg.show_calendar);
-        assert!(
-            cfg.dynamic_album_color && cfg.compact_album_gradient && cfg.show_pill_translation
-        );
+        assert!(cfg.dynamic_album_color && cfg.compact_album_gradient && cfg.show_pill_translation);
         assert!(cfg.karaoke_lyrics && cfg.romaji_lyrics && cfg.translate_lyrics);
         assert_eq!(cfg.karaoke_lyric_mode, KaraokeLyricMode::Original);
         assert_eq!(cfg.text_align, TextAlign::Left);
@@ -360,7 +365,8 @@ mod tests {
 
     #[test]
     fn legacy_partial_toml_loads_with_new_defaults() {
-        let legacy = "auto_hide_when_idle = true\ntop_offset_px = 18.0\ncollapse_timeout_secs = 7\n";
+        let legacy =
+            "auto_hide_when_idle = true\ntop_offset_px = 18.0\ncollapse_timeout_secs = 7\n";
         let parsed = Config::from_toml_str(legacy);
         assert!(parsed.auto_hide_when_idle);
         assert_eq!(parsed.top_offset_px, 18.0);

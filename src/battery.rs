@@ -134,12 +134,12 @@ pub fn read_battery() -> Option<BatteryInfo> {
         } else {
             BatteryStatus::Discharging
         };
-        let remaining_secs = if status == BatteryStatus::Discharging && sps.BatteryLifeTime != u32::MAX
-        {
-            Some(sps.BatteryLifeTime)
-        } else {
-            None
-        };
+        let remaining_secs =
+            if status == BatteryStatus::Discharging && sps.BatteryLifeTime != u32::MAX {
+                Some(sps.BatteryLifeTime)
+            } else {
+                None
+            };
         Some(BatteryInfo {
             percent,
             status,
@@ -220,7 +220,10 @@ mod tests {
     #[test]
     fn linux_remaining_converts_sysfs_units_to_seconds() {
         assert_eq!(linux_remaining_secs(Some(1_500_000), None, None), Some(1));
-        assert_eq!(linux_remaining_secs(None, Some(50_000), Some(10_000)), Some(18_000));
+        assert_eq!(
+            linux_remaining_secs(None, Some(50_000), Some(10_000)),
+            Some(18_000)
+        );
         assert_eq!(linux_remaining_secs(None, None, Some(10_000)), None);
     }
 
@@ -259,9 +262,6 @@ mod tests {
             remaining_secs: None,
         });
         assert!(tracker.check(charging, true, 20, 10).is_none());
-        assert_eq!(
-            tracker.check(bat19, true, 20, 10).unwrap().0,
-            "Low Battery"
-        );
+        assert_eq!(tracker.check(bat19, true, 20, 10).unwrap().0, "Low Battery");
     }
 }

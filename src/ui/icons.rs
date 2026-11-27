@@ -79,8 +79,14 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, kind: IconKind, color: Co
         }
         IconKind::Close => {
             let r = s * 0.28;
-            painter.line_segment([Pos2::new(c.x - r, c.y - r), Pos2::new(c.x + r, c.y + r)], stroke);
-            painter.line_segment([Pos2::new(c.x + r, c.y - r), Pos2::new(c.x - r, c.y + r)], stroke);
+            painter.line_segment(
+                [Pos2::new(c.x - r, c.y - r), Pos2::new(c.x + r, c.y + r)],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x + r, c.y - r), Pos2::new(c.x - r, c.y + r)],
+                stroke,
+            );
         }
         IconKind::Settings => {
             let outer_r = s * 0.38;
@@ -132,17 +138,26 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, kind: IconKind, color: Co
             );
             let bar_y = box_rect.top() + s * 0.20;
             painter.line_segment(
-                [Pos2::new(box_rect.left(), bar_y), Pos2::new(box_rect.right(), bar_y)],
+                [
+                    Pos2::new(box_rect.left(), bar_y),
+                    Pos2::new(box_rect.right(), bar_y),
+                ],
                 stroke,
             );
             let pin_top = box_rect.top() - s * 0.10;
             let pin_bot = box_rect.top() + s * 0.05;
             painter.line_segment(
-                [Pos2::new(c.x - s * 0.18, pin_top), Pos2::new(c.x - s * 0.18, pin_bot)],
+                [
+                    Pos2::new(c.x - s * 0.18, pin_top),
+                    Pos2::new(c.x - s * 0.18, pin_bot),
+                ],
                 stroke,
             );
             painter.line_segment(
-                [Pos2::new(c.x + s * 0.18, pin_top), Pos2::new(c.x + s * 0.18, pin_bot)],
+                [
+                    Pos2::new(c.x + s * 0.18, pin_top),
+                    Pos2::new(c.x + s * 0.18, pin_bot),
+                ],
                 stroke,
             );
         }
@@ -224,10 +239,22 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, kind: IconKind, color: Co
             painter.line_segment([Pos2::new(lx, by), Pos2::new(rx, ty)], stroke);
             painter.line_segment([Pos2::new(lx, ty), Pos2::new(rx, by)], stroke);
             let ah = s * 0.13;
-            painter.line_segment([Pos2::new(rx - ah, ty - ah * 0.2), Pos2::new(rx, ty)], stroke);
-            painter.line_segment([Pos2::new(rx - ah * 0.2, ty + ah), Pos2::new(rx, ty)], stroke);
-            painter.line_segment([Pos2::new(rx - ah * 0.2, by - ah), Pos2::new(rx, by)], stroke);
-            painter.line_segment([Pos2::new(rx - ah, by + ah * 0.2), Pos2::new(rx, by)], stroke);
+            painter.line_segment(
+                [Pos2::new(rx - ah, ty - ah * 0.2), Pos2::new(rx, ty)],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(rx - ah * 0.2, ty + ah), Pos2::new(rx, ty)],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(rx - ah * 0.2, by - ah), Pos2::new(rx, by)],
+                stroke,
+            );
+            painter.line_segment(
+                [Pos2::new(rx - ah, by + ah * 0.2), Pos2::new(rx, by)],
+                stroke,
+            );
         }
         IconKind::Repeat | IconKind::RepeatOne => {
             let lx = c.x - s * 0.32;

@@ -110,11 +110,11 @@ Every `v*` GitHub Release contains:
 
 | Asset | Install |
 | :--- | :--- |
-| `Liebert_Dynamic_Island-0.1.7-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
+| `Liebert_Dynamic_Island-0.1.8-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
 | `liebert-dynamic-island-linux-x86_64.tar.gz` | `tar -xzf`, then run `./liebert-dynamic-island-linux-x86_64/liebert-dynamic-island`. Includes `LICENSE.md`, `README.md`, `.desktop` and icon. |
 | `liebert-dynamic-island-windows-x86_64-setup.exe` | NSIS installer (per-user install, Start Menu shortcuts + uninstaller). |
 | `liebert-dynamic-island-windows-x86_64.zip` | Portable `.exe` + license + README. |
-| `liebert-dynamic-island-aur-0.1.7.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
+| `liebert-dynamic-island-aur-0.1.8.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
 
 Arch Linux users can build from `packaging/aur/` with `makepkg -si` once the package is submitted to the AUR (`yay -S liebert-dynamic-island`). AUR submission itself needs a maintainer account and is **not** automated by CI.
 
@@ -303,7 +303,7 @@ cargo clippy --all-targets -- -D warnings  # Run Clippy with warnings treated as
 cargo build --release                      # Build stripped LTO release binary
 ./scripts/build-linux-release.sh           # Linux tar.gz + AppImage in dist/
 # Windows (with NSIS installed, from repo root):
-#   makensis /DAPP_VERSION=0.1.7 installer\windows\installer.nsi
+#   makensis /DAPP_VERSION=0.1.8 installer\windows\installer.nsi
 ```
 
 Pada host Linux, installer Windows yang sama dapat dibangun tanpa mesin Windows memakai Docker (cross-compile GNU + `makensis`):
@@ -317,7 +317,7 @@ docker run --rm -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/work -w /work rust:
   mkdir -p dist/staging-win
   cp target/x86_64-pc-windows-gnu/release/liebert-dynamic-island.exe dist/staging-win/
   cp LICENSE.md README.md dist/staging-win/
-  makensis -DAPP_VERSION=0.1.7 -DSTAGING_DIR=/work/dist/staging-win \
+  makensis -DAPP_VERSION=0.1.8 -DSTAGING_DIR=/work/dist/staging-win \
     -DOUT_FILE=/work/dist/liebert-dynamic-island-windows-x86_64-setup.exe \
     installer/windows/installer.nsi
 '
@@ -332,4 +332,4 @@ Hasilnya: `dist/liebert-dynamic-island-windows-x86_64-setup.exe` (per-user NSIS 
 - **Windows notifications do not appear:** Run `cargo run -- --spike-notifications`. If `Access: Denied`, enable notification access in **Windows Settings → Privacy & security → Notifications**.
 - **Accent color in Settings appears unchanged while music plays:** Disable **Dynamic accent & glow from album art** in Settings (`Music & Lyrics`), as album art accent overrides the manual accent color while a track is active.
 - **Lyrics out of sync:** Adjust **Lyric sync offset (ms)** (`-5000` to `+5000 ms`) under **Music & Lyrics** in Settings.
-- **Linux notification listener fails to start:** Another `org.freedesktop.Notifications` daemon (`dunst`, `mako`, desktop shell) is already claiming the session D-Bus name. Stop the existing daemon before launching.
+- **Linux notifications do not appear:** Run `cargo run -- --spike-notifications`. If another daemon (`dunst`, `mako`, quickshell, desktop shell) owns `org.freedesktop.Notifications`, the app automatically switches to passive D-Bus monitor mode and still receives notifications — no need to stop the existing daemon. If the spike reports that both the direct listener and monitor are unavailable, check that `DBUS_SESSION_BUS_ADDRESS` is set in the session that launches the app.

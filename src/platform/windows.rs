@@ -18,7 +18,9 @@ use windows::UI::Notifications::{
     KnownNotificationBindings, NotificationKinds, UserNotification,
     UserNotificationChangedEventArgs,
 };
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_EXTENDED_FRAME_BOUNDS,
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmGetWindowAttribute,
@@ -29,20 +31,23 @@ use windows::Win32::Graphics::Gdi::{
     MonitorFromWindow, ReleaseDC,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+use windows::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegCreateKeyW, RegDeleteValueW,
+    RegOpenKeyExW, RegSetValueExW,
+};
 use windows::Win32::UI::Shell::{
-    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
-    SHQueryUserNotificationState,
+    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, DispatchMessageW, FindWindowExW, FindWindowW, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
     GWLP_WNDPROC, GetAncestor, GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow,
     GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
     HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MONITORINFOF_PRIMARY, MSG,
-    PM_REMOVE, PeekMessageW, SM_CXSCREEN, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WM_NCCALCSIZE, WNDPROC,
-    WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    PM_REMOVE, PeekMessageW, SM_CXSCREEN, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, TranslateMessage, WM_NCCALCSIZE, WNDPROC, WS_BORDER, WS_CAPTION,
+    WS_DLGFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::HSTRING;
 
@@ -124,10 +129,7 @@ fn extract_notification_item(notif: &UserNotification) -> Option<NotificationIte
         }
     }
 
-    let title = lines
-        .first()
-        .cloned()
-        .unwrap_or_else(|| app_name.clone());
+    let title = lines.first().cloned().unwrap_or_else(|| app_name.clone());
     let body = if lines.len() > 1 {
         lines[1..].join(" — ")
     } else {
@@ -199,9 +201,9 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
             let listener = match UserNotificationListener::Current() {
                 Ok(l) => l,
                 Err(e) => {
-                    let _ = tx.send(PlatformEvent::Status(ListenerStatus::AccessDenied(format!(
-                        "Listener unavailable: {e}"
-                    ))));
+                    let _ = tx.send(PlatformEvent::Status(ListenerStatus::AccessDenied(
+                        format!("Listener unavailable: {e}"),
+                    )));
                     on_wake();
                     return;
                 }
@@ -215,10 +217,12 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
             match access {
                 Ok(UserNotificationListenerAccessStatus::Allowed) => {}
                 Ok(other) => {
-                    let _ = tx.send(PlatformEvent::Status(ListenerStatus::AccessDenied(format!(
-                        "Access {} — enable Windows Notifications access",
-                        access_status_label(other)
-                    ))));
+                    let _ = tx.send(PlatformEvent::Status(ListenerStatus::AccessDenied(
+                        format!(
+                            "Access {} — enable Windows Notifications access",
+                            access_status_label(other)
+                        ),
+                    )));
                     on_wake();
                     return;
                 }
@@ -314,9 +318,8 @@ pub fn spawn_media_listener(
         .name("win-smtc-media".to_owned())
         .spawn(move || {
             init_com_mta();
-            let Ok(manager) =
-                GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
-                    .and_then(|op| op.join())
+            let Ok(manager) = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
+                .and_then(|op| op.join())
             else {
                 return;
             };
@@ -337,18 +340,19 @@ pub fn spawn_media_listener(
             let mut cached_art: CachedAlbumArt = None;
             loop {
                 let current = read_smtc_track(&manager, &mut cached_art);
-                let snapshot = current.as_ref().map(|(t, raw_pos_ms, last_updated_ticks)| {
-                    MediaSnapshot {
-                        title: t.title.clone(),
-                        artist: t.artist.clone(),
-                        is_playing: t.is_playing,
-                        raw_pos_ms: *raw_pos_ms,
-                        last_updated_ticks: *last_updated_ticks,
-                        duration_ms: t.duration_ms,
-                        shuffle: t.shuffle,
-                        repeat: t.repeat,
-                    }
-                });
+                let snapshot =
+                    current
+                        .as_ref()
+                        .map(|(t, raw_pos_ms, last_updated_ticks)| MediaSnapshot {
+                            title: t.title.clone(),
+                            artist: t.artist.clone(),
+                            is_playing: t.is_playing,
+                            raw_pos_ms: *raw_pos_ms,
+                            last_updated_ticks: *last_updated_ticks,
+                            duration_ms: t.duration_ms,
+                            shuffle: t.shuffle,
+                            repeat: t.repeat,
+                        });
                 if snapshot != last_snapshot {
                     last_snapshot = snapshot;
                     let _ = tx.send(PlatformEvent::Media(current.map(|(t, _, _)| t)));
@@ -640,13 +644,8 @@ pub fn apply_no_activate_hook(window_title: &str) {
     }
 
     if ORIG_WNDPROC.load(Ordering::Relaxed) == 0 {
-        let prev = unsafe {
-            SetWindowLongPtrW(
-                hwnd,
-                GWLP_WNDPROC,
-                overlay_wndproc as *const () as isize,
-            )
-        };
+        let prev =
+            unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as *const () as isize) };
         if prev != 0 {
             ORIG_WNDPROC.store(prev, Ordering::Relaxed);
         }
@@ -1005,7 +1004,8 @@ pub fn detect_fullscreen_state() -> (bool, bool) {
 
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
     let has_caption = (style & WS_CAPTION.0) == WS_CAPTION.0;
-    let (exclusive, windowed) = classify_fullscreen_rects(win_rect, info.rcMonitor, info.rcWork, has_caption);
+    let (exclusive, windowed) =
+        classify_fullscreen_rects(win_rect, info.rcMonitor, info.rcWork, has_caption);
     (exclusive, windowed || is_zoomed)
 }
 
@@ -1044,6 +1044,52 @@ pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
         );
     }
     super::collect_fonts_from_dirs(&dirs)
+}
+
+/// Per-user autostart via HKCU Run. No Administrator rights are needed.
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const VALUE_NAME: &str = "LiebertDynamicIsland";
+
+    let subkey = HSTRING::from(RUN_KEY);
+    let value_name = HSTRING::from(VALUE_NAME);
+    let mut hkey = HKEY::default();
+
+    if !enabled {
+        let status =
+            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, &subkey, None, KEY_SET_VALUE, &mut hkey) };
+        if status == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        if status.0 != 0 {
+            return Err(format!("RegOpenKeyExW failed: {}", status.0));
+        }
+        let status = unsafe { RegDeleteValueW(hkey, &value_name) };
+        let _ = unsafe { RegCloseKey(hkey) };
+        if status != ERROR_FILE_NOT_FOUND && status.0 != 0 {
+            return Err(format!("RegDeleteValueW failed: {}", status.0));
+        }
+        return Ok(());
+    }
+
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let command = super::windows_autostart_command(&exe);
+    let mut units: Vec<u16> = command.encode_utf16().collect();
+    units.push(0);
+    let bytes: Vec<u8> = units.into_iter().flat_map(u16::to_le_bytes).collect();
+
+    // RegCreateKeyW opens the key when present and creates it otherwise; unlike RegCreateKeyExW
+    // it needs no SECURITY_ATTRIBUTES (and therefore no extra `Win32_Security` feature).
+    let status = unsafe { RegCreateKeyW(HKEY_CURRENT_USER, &subkey, &mut hkey) };
+    if status.0 != 0 {
+        return Err(format!("RegCreateKeyW failed: {}", status.0));
+    }
+    let status = unsafe { RegSetValueExW(hkey, &value_name, None, REG_SZ, Some(&bytes)) };
+    let _ = unsafe { RegCloseKey(hkey) };
+    if status.0 != 0 {
+        return Err(format!("RegSetValueExW failed: {}", status.0));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

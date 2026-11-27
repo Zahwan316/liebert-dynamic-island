@@ -2,12 +2,18 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
-use eframe::egui::{self, Color32, CornerRadius, RichText, Stroke, Vec2, ViewportBuilder, ViewportId};
+use eframe::egui::{
+    self, Color32, CornerRadius, RichText, Stroke, Vec2, ViewportBuilder, ViewportId,
+};
 
 use crate::battery::{format_remaining, read_battery};
-use crate::calendar::{CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events};
+use crate::calendar::{
+    CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events,
+};
 use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
-use crate::config::{Config, IdleDisplayMode, KaraokeLyricMode, TaskbarFormat, TaskbarPosition, TextAlign};
+use crate::config::{
+    Config, IdleDisplayMode, KaraokeLyricMode, TaskbarFormat, TaskbarPosition, TextAlign,
+};
 use crate::lyrics::TRANSLATE_LANGUAGES;
 use crate::platform::InstalledFont;
 use crate::todo::TodoStore;
@@ -21,6 +27,7 @@ pub enum SettingsTab {
     Lyrics,
     Features,
     System,
+    Battery,
     Todo,
     Calendar,
 }
@@ -32,17 +39,19 @@ impl SettingsTab {
             Self::Lyrics => "Lyrics",
             Self::Features => "Features",
             Self::System => "System",
+            Self::Battery => "Battery",
             Self::Todo => "Tasks",
             Self::Calendar => "Calendar",
         }
     }
 
-    fn all() -> [Self; 6] {
+    fn all() -> [Self; 7] {
         [
             Self::Appearance,
             Self::Lyrics,
             Self::Features,
             Self::System,
+            Self::Battery,
             Self::Todo,
             Self::Calendar,
         ]
@@ -212,29 +221,31 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
             let prev_font_search = ds.font_search.clone();
             let prev_todo_len = ds.todos.items.len();
 
-            egui::CentralPanel::default().frame(panel_frame).show(ui, |ui| {
-                let ds = &mut *ds;
-                render_settings_tabs_body(
-                    ui,
-                    &mut SettingsBodyState {
-                        tab: &mut ds.tab,
-                        config: &mut ds.config,
-                        todos: &mut ds.todos,
-                        new_todo_input: &mut ds.new_todo_input,
-                        calendar_url_input: &mut ds.calendar_url_input,
-                        calendar_events: &ds.calendar_events,
-                        calendar_status: &ds.calendar_status,
-                        calendar_cmd_tx: Some(&ds.calendar_cmd_tx),
-                        config_dirty: &mut local_config_dirty,
-                        todos_dirty: &mut local_todos_dirty,
-                        test_notification_requested: &mut local_test_notif,
-                        calendar_set_url_requested: &mut None,
-                        calendar_refresh_requested: &mut false,
-                        installed_fonts: &mut ds.installed_fonts,
-                        font_search: &mut ds.font_search,
-                    },
-                );
-            });
+            egui::CentralPanel::default()
+                .frame(panel_frame)
+                .show(ui, |ui| {
+                    let ds = &mut *ds;
+                    render_settings_tabs_body(
+                        ui,
+                        &mut SettingsBodyState {
+                            tab: &mut ds.tab,
+                            config: &mut ds.config,
+                            todos: &mut ds.todos,
+                            new_todo_input: &mut ds.new_todo_input,
+                            calendar_url_input: &mut ds.calendar_url_input,
+                            calendar_events: &ds.calendar_events,
+                            calendar_status: &ds.calendar_status,
+                            calendar_cmd_tx: Some(&ds.calendar_cmd_tx),
+                            config_dirty: &mut local_config_dirty,
+                            todos_dirty: &mut local_todos_dirty,
+                            test_notification_requested: &mut local_test_notif,
+                            calendar_set_url_requested: &mut None,
+                            calendar_refresh_requested: &mut false,
+                            installed_fonts: &mut ds.installed_fonts,
+                            font_search: &mut ds.font_search,
+                        },
+                    );
+                });
 
             if local_config_dirty
                 || local_todos_dirty
@@ -272,7 +283,19 @@ struct SettingsBodyState<'a> {
     font_search: &'a mut String,
 }
 
+/// Consistent group header: title first, then the settings that belong to it.
+fn settings_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+    ui.add_space(6.0);
+    ui.label(RichText::new(title).strong());
+    egui::Frame::new()
+        .fill(Color32::from_rgb(26, 26, 32))
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(8)
+        .show(ui, |ui| add_contents(ui));
+}
+
 fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
+    let tab_title = st.tab.label();
     let left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
     let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
     if !ui.ctx().memory(|m| m.focused().is_some()) && (left || right) {
@@ -296,10 +319,11 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
                     } else {
                         Color32::from_rgb(32, 32, 38)
                     };
-                    let btn = egui::Button::new(
-                        RichText::new(tab.label())
-                            .color(if selected { Color32::WHITE } else { Color32::GRAY }),
-                    )
+                    let btn = egui::Button::new(RichText::new(tab.label()).color(if selected {
+                        Color32::WHITE
+                    } else {
+                        Color32::GRAY
+                    }))
                     .min_size(Vec2::new(112.0, 28.0))
                     .fill(fill)
                     .corner_radius(CornerRadius::same(8));
@@ -311,34 +335,47 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
         );
         ui.add_space(10.0);
         ui.allocate_ui_with_layout(
-            Vec2::new(ui.available_width().max(240.0), ui.available_height().max(220.0)),
+            Vec2::new(
+                ui.available_width().max(240.0),
+                ui.available_height().max(220.0),
+            ),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
                 ui.set_clip_rect(ui.max_rect());
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| match *st.tab {
-                        SettingsTab::Appearance => render_display_tab(
-                            ui,
-                            st.config,
-                            st.config_dirty,
-                            st.installed_fonts,
-                            st.font_search,
-                        ),
-                        SettingsTab::Lyrics => {
-                            render_lyrics_tab(ui, st.config, st.config_dirty);
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(tab_title).strong().size(18.0));
+                        ui.add_space(4.0);
+                        ui.separator();
+                        match *st.tab {
+                            SettingsTab::Appearance => render_display_tab(
+                                ui,
+                                st.config,
+                                st.config_dirty,
+                                st.installed_fonts,
+                                st.font_search,
+                            ),
+                            SettingsTab::Lyrics => {
+                                render_lyrics_tab(ui, st.config, st.config_dirty);
+                            }
+                            SettingsTab::Features => render_features_tab(
+                                ui,
+                                st.config,
+                                st.config_dirty,
+                                st.test_notification_requested,
+                            ),
+                            SettingsTab::System => {
+                                render_system_tab(ui, st.config, st.config_dirty);
+                            }
+                            SettingsTab::Battery => {
+                                render_battery_tab(ui, st.config, st.config_dirty);
+                            }
+                            SettingsTab::Todo => {
+                                *st.todos_dirty |= render_todo_tab(ui, st.todos, st.new_todo_input);
+                            }
+                            SettingsTab::Calendar => render_calendar_tab(ui, st),
                         }
-                        SettingsTab::Features => render_features_tab(
-                            ui,
-                            st.config,
-                            st.config_dirty,
-                            st.test_notification_requested,
-                        ),
-                        SettingsTab::System => render_system_tab(ui, st.config, st.config_dirty),
-                        SettingsTab::Todo => {
-                            *st.todos_dirty |= render_todo_tab(ui, st.todos, st.new_todo_input);
-                        }
-                        SettingsTab::Calendar => render_calendar_tab(ui, st),
                     });
             },
         );
@@ -448,28 +485,30 @@ pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<
                 "Configured (synced in overlay)"
             };
 
-            egui::CentralPanel::default().frame(panel_frame).show(ui, |ui| {
-                render_settings_tabs_body(
-                    ui,
-                    &mut SettingsBodyState {
-                        tab: &mut self.tab,
-                        config: &mut self.config,
-                        todos: &mut self.todos,
-                        new_todo_input: &mut self.new_todo_input,
-                        calendar_url_input: &mut self.calendar_url_input,
-                        calendar_events: &[],
-                        calendar_status: cal_status,
-                        calendar_cmd_tx: None,
-                        config_dirty: &mut config_dirty,
-                        todos_dirty: &mut todos_dirty,
-                        test_notification_requested: &mut test_notif,
-                        calendar_set_url_requested: &mut cal_set_url,
-                        calendar_refresh_requested: &mut cal_refresh,
-                        installed_fonts: &mut self.installed_fonts,
-                        font_search: &mut self.font_search,
-                    },
-                );
-            });
+            egui::CentralPanel::default()
+                .frame(panel_frame)
+                .show(ui, |ui| {
+                    render_settings_tabs_body(
+                        ui,
+                        &mut SettingsBodyState {
+                            tab: &mut self.tab,
+                            config: &mut self.config,
+                            todos: &mut self.todos,
+                            new_todo_input: &mut self.new_todo_input,
+                            calendar_url_input: &mut self.calendar_url_input,
+                            calendar_events: &[],
+                            calendar_status: cal_status,
+                            calendar_cmd_tx: None,
+                            config_dirty: &mut config_dirty,
+                            todos_dirty: &mut todos_dirty,
+                            test_notification_requested: &mut test_notif,
+                            calendar_set_url_requested: &mut cal_set_url,
+                            calendar_refresh_requested: &mut cal_refresh,
+                            installed_fonts: &mut self.installed_fonts,
+                            font_search: &mut self.font_search,
+                        },
+                    );
+                });
 
             if config_dirty {
                 if self.config.font_name != self.applied_font_name {
@@ -479,6 +518,9 @@ pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<
                 if let Err(err) = self.config.save() {
                     eprintln!("Failed to save config: {err}");
                 } else {
+                    if let Err(err) = crate::platform::set_autostart(self.config.start_with_os) {
+                        eprintln!("Failed to apply autostart setting: {err}");
+                    }
                     self.notify("config");
                 }
             }
@@ -660,7 +702,10 @@ fn render_display_tab(
         .add(egui::Slider::new(&mut config.idle_width, 110.0..=240.0).text("Idle Width (px)"))
         .changed();
     changed |= ui
-        .add(egui::Slider::new(&mut config.expanded_width, 320.0..=520.0).text("Expanded Width (px)"))
+        .add(
+            egui::Slider::new(&mut config.expanded_width, 320.0..=520.0)
+                .text("Expanded Width (px)"),
+        )
         .changed();
     changed |= ui
         .add(egui::Slider::new(&mut config.corner_radius, 8..=28).text("Corner Radius"))
@@ -681,7 +726,10 @@ fn render_display_tab(
             changed = true;
         }
         ui.label("Accent:");
-        if ui.color_edit_button_srgb(&mut config.accent_color).changed() {
+        if ui
+            .color_edit_button_srgb(&mut config.accent_color)
+            .changed()
+        {
             changed = true;
         }
         ui.label("Text:");
@@ -729,9 +777,10 @@ fn render_display_tab(
                     config.font_name.clear();
                     changed = true;
                 }
-                for f in fonts.iter().filter(|f| {
-                    query.is_empty() || f.name.to_ascii_lowercase().contains(&query)
-                }) {
+                for f in fonts
+                    .iter()
+                    .filter(|f| query.is_empty() || f.name.to_ascii_lowercase().contains(&query))
+                {
                     let is_sel = config.font_name.eq_ignore_ascii_case(&f.name);
                     if ui.selectable_label(is_sel, &f.name).clicked() && !is_sel {
                         config.font_name = f.name.clone();
@@ -817,7 +866,9 @@ fn render_display_tab(
         }
     });
     ui.horizontal(|ui| {
-        changed |= ui.checkbox(&mut config.clock_24h, "24-hour format").changed();
+        changed |= ui
+            .checkbox(&mut config.clock_24h, "24-hour format")
+            .changed();
         changed |= ui
             .checkbox(&mut config.clock_show_seconds, "Show seconds")
             .changed();
@@ -936,20 +987,24 @@ fn render_features_tab(
     ui.add_space(8.0);
     ui.label(RichText::new("Modules & Auto-Hide").strong());
     changed |= ui
-        .checkbox(&mut config.auto_hide_when_idle, "Auto-hide island when idle")
+        .checkbox(
+            &mut config.auto_hide_when_idle,
+            "Auto-hide island when idle",
+        )
         .changed();
     changed |= ui
         .add_enabled(
             config.auto_hide_when_idle,
-            egui::Slider::new(&mut config.auto_hide_delay_secs, 0..=60)
-                .text("Auto-hide delay (s)"),
+            egui::Slider::new(&mut config.auto_hide_delay_secs, 0..=60).text("Auto-hide delay (s)"),
         )
         .changed();
     if config.auto_hide_when_idle {
         ui.label(
-            RichText::new("Tip: arahkan kursor ke tepi atas tengah layar untuk memunculkan notch kembali.")
-                .small()
-                .color(Color32::GRAY),
+            RichText::new(
+                "Tip: arahkan kursor ke tepi atas tengah layar untuk memunculkan notch kembali.",
+            )
+            .small()
+            .color(Color32::GRAY),
         );
     }
     changed |= ui
@@ -993,7 +1048,9 @@ fn render_features_tab(
     if config.show_pomodoro {
         ui.indent("pomodoro_sub_opts", |ui| {
             changed |= ui
-                .add(egui::Slider::new(&mut config.pomodoro_focus_mins, 1..=120).text("Focus (min)"))
+                .add(
+                    egui::Slider::new(&mut config.pomodoro_focus_mins, 1..=120).text("Focus (min)"),
+                )
                 .changed();
             changed |= ui
                 .add(
@@ -1107,16 +1164,19 @@ fn apply_settings_theme(ui: &mut egui::Ui, accent: [u8; 3]) {
     style.visuals.widgets.active.corner_radius = CornerRadius::same(7);
     style.visuals.selection.bg_fill =
         Color32::from_rgba_unmultiplied(accent[0], accent[1], accent[2], 175);
-    style.visuals.selection.stroke = Stroke::new(1.0, Color32::from_rgb(accent[0], accent[1], accent[2]));
+    style.visuals.selection.stroke =
+        Stroke::new(1.0, Color32::from_rgb(accent[0], accent[1], accent[2]));
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
 }
 
 fn render_calendar_tab(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
     ui.label(RichText::new("Google Calendar Secret iCal URL (.ics)").strong());
     ui.label(
-        RichText::new("Google Calendar > Settings > [Your Calendar] > Secret address in iCal format")
-            .small()
-            .color(Color32::GRAY),
+        RichText::new(
+            "Google Calendar > Settings > [Your Calendar] > Secret address in iCal format",
+        )
+        .small()
+        .color(Color32::GRAY),
     );
     ui.add_space(4.0);
     ui.add(
@@ -1145,7 +1205,10 @@ fn render_calendar_tab(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
             }
         }
         if ui
-            .add_enabled(!st.calendar_url_input.trim().is_empty(), egui::Button::new("Copy"))
+            .add_enabled(
+                !st.calendar_url_input.trim().is_empty(),
+                egui::Button::new("Copy"),
+            )
             .clicked()
         {
             ui.ctx().copy_text(st.calendar_url_input.trim().to_owned());
@@ -1185,103 +1248,159 @@ fn render_calendar_tab(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
 fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut bool) {
     let battery = read_battery();
 
-    ui.heading("Taskbar System Monitor");
-    ui.add_space(4.0);
-    if ui
-        .checkbox(&mut config.taskbar_monitor_enabled, "Enable taskbar system monitor")
-        .changed()
-    {
-        *config_dirty = true;
-    }
-
-    ui.add_enabled_ui(config.taskbar_monitor_enabled, |ui| {
-        ui.add_space(6.0);
-        ui.label(RichText::new("Metrics").strong());
-        ui.horizontal_wrapped(|ui| {
-            if ui.checkbox(&mut config.taskbar_show_cpu, "CPU (%)").changed() {
-                *config_dirty = true;
-            }
-            if ui.checkbox(&mut config.taskbar_show_ram, "RAM").changed() {
-                *config_dirty = true;
-            }
-            if ui.checkbox(&mut config.taskbar_show_disk, "Disk (C:)").changed() {
-                *config_dirty = true;
-            }
-            if ui.checkbox(&mut config.taskbar_show_network, "Network (Up/Down)").changed() {
-                *config_dirty = true;
-            }
-            if battery.is_some()
-                && ui.checkbox(&mut config.taskbar_show_battery, "Battery").changed()
-            {
-                *config_dirty = true;
-            }
-        });
-
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label("Format:");
-            for fmt in [
-                TaskbarFormat::CompactText,
-                TaskbarFormat::IconValue,
-                TaskbarFormat::MiniBar,
-            ] {
-                if ui
-                    .selectable_value(&mut config.taskbar_format, fmt, fmt.label())
-                    .changed()
-                {
-                    *config_dirty = true;
-                }
-            }
-        });
-
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label("Position:");
-            for pos in [
-                TaskbarPosition::LeftOfTray,
-                TaskbarPosition::RightOfTray,
-                TaskbarPosition::TopOfTaskbar,
-            ] {
-                if ui
-                    .selectable_value(&mut config.taskbar_position, pos, pos.label())
-                    .changed()
-                {
-                    *config_dirty = true;
-                }
-            }
-        });
-
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label("Update Interval:");
-            for (ms, label) in [(500_u64, "500 ms"), (1000, "1 s"), (2000, "2 s")] {
-                if ui
-                    .selectable_value(&mut config.taskbar_interval_ms, ms, label)
-                    .changed()
-                {
-                    *config_dirty = true;
-                }
-            }
-        });
+    settings_group(ui, "Startup", |ui| {
+        if ui
+            .checkbox(&mut config.start_with_os, "Start with OS (autostart)")
+            .changed()
+        {
+            *config_dirty = true;
+        }
+        ui.label(
+            RichText::new(
+                "Windows: HKCU Run key • Linux: ~/.config/autostart — no admin/root required",
+            )
+            .small()
+            .color(Color32::GRAY),
+        );
     });
 
-    ui.add_space(12.0);
-    ui.separator();
-    ui.add_space(6.0);
-    ui.heading("Laptop Battery");
-    if let Some(bat) = battery {
-        let rem_str = bat
-            .remaining_secs
-            .map(|s| format!(" — {} remaining", format_remaining(s)))
-            .unwrap_or_default();
-        ui.label(format!(
-            "Status: {} {}% ({}){}",
-            bat.status.short_symbol(),
-            bat.percent,
-            bat.status.label(),
-            rem_str
-        ));
-        ui.add_space(4.0);
+    settings_group(ui, "Taskbar System Monitor", |ui| {
+        if ui
+            .checkbox(
+                &mut config.taskbar_monitor_enabled,
+                "Enable taskbar system monitor",
+            )
+            .changed()
+        {
+            *config_dirty = true;
+        }
+
+        ui.add_enabled_ui(config.taskbar_monitor_enabled, |ui| {
+            ui.add_space(6.0);
+            ui.label(RichText::new("Metrics").strong());
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .checkbox(&mut config.taskbar_show_cpu, "CPU (%)")
+                    .changed()
+                {
+                    *config_dirty = true;
+                }
+                if ui.checkbox(&mut config.taskbar_show_ram, "RAM").changed() {
+                    *config_dirty = true;
+                }
+                if ui.checkbox(&mut config.taskbar_show_disk, "Disk").changed() {
+                    *config_dirty = true;
+                }
+                if ui
+                    .checkbox(&mut config.taskbar_show_network, "Network (Up/Down)")
+                    .changed()
+                {
+                    *config_dirty = true;
+                }
+                if battery.is_some()
+                    && ui
+                        .checkbox(&mut config.taskbar_show_battery, "Battery")
+                        .changed()
+                {
+                    *config_dirty = true;
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(
+                    "Linux storage covers all mounted system filesystems; Windows reports C:.",
+                )
+                .small()
+                .color(Color32::GRAY),
+            );
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Format:");
+                for fmt in [
+                    TaskbarFormat::CompactText,
+                    TaskbarFormat::IconValue,
+                    TaskbarFormat::MiniBar,
+                ] {
+                    if ui
+                        .selectable_value(&mut config.taskbar_format, fmt, fmt.label())
+                        .changed()
+                    {
+                        *config_dirty = true;
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Position:");
+                for pos in [
+                    TaskbarPosition::LeftOfTray,
+                    TaskbarPosition::RightOfTray,
+                    TaskbarPosition::TopOfTaskbar,
+                ] {
+                    if ui
+                        .selectable_value(&mut config.taskbar_position, pos, pos.label())
+                        .changed()
+                    {
+                        *config_dirty = true;
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Update Interval:");
+                for (ms, label) in [(500_u64, "500 ms"), (1000, "1 s"), (2000, "2 s")] {
+                    if ui
+                        .selectable_value(&mut config.taskbar_interval_ms, ms, label)
+                        .changed()
+                    {
+                        *config_dirty = true;
+                    }
+                }
+            });
+        });
+    });
+}
+
+fn render_battery_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut bool) {
+    let battery = read_battery();
+
+    settings_group(ui, "Battery Tab", |ui| {
+        if ui
+            .checkbox(&mut config.show_battery, "Show Battery tab")
+            .changed()
+        {
+            *config_dirty = true;
+        }
+        ui.label(
+            RichText::new("Charging is animated in the Battery tab; no animation while unplugged.")
+                .small()
+                .color(Color32::GRAY),
+        );
+    });
+
+    settings_group(ui, "Device Status", |ui| {
+        if let Some(bat) = battery {
+            let rem_str = bat
+                .remaining_secs
+                .map(|s| format!(" — {} remaining", format_remaining(s)))
+                .unwrap_or_default();
+            ui.label(format!(
+                "Status: {} {}% ({}){}",
+                bat.status.short_symbol(),
+                bat.percent,
+                bat.status.label(),
+                rem_str
+            ));
+        } else {
+            ui.label("No battery detected (desktop or unsupported device)");
+        }
+    });
+
+    settings_group(ui, "Low Battery Alerts", |ui| {
         if ui
             .checkbox(&mut config.battery_low_alerts, "Low-battery notifications")
             .changed()
@@ -1314,7 +1433,5 @@ fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut 
                 *config_dirty = true;
             }
         });
-    } else {
-        ui.label("No battery detected (desktop or unsupported device)");
-    }
+    });
 }

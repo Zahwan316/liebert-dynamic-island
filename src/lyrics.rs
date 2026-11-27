@@ -353,8 +353,7 @@ fn has_cjk_or_hangul(text: &str) -> bool {
 }
 
 pub fn has_japanese_kana(text: &str) -> bool {
-    text.chars()
-        .any(|c| matches!(c as u32, 0x3040..=0x30FF))
+    text.chars().any(|c| matches!(c as u32, 0x3040..=0x30FF))
 }
 
 pub fn romanize_line(text: &str, prefer_japanese: bool) -> Option<String> {
@@ -458,10 +457,7 @@ fn enrich_lyrics_data(
             let mut lines = lines_arc.to_vec();
             let texts: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
             let (romajis, translations) = enrich_lines(agent, &texts, translate_lang, need_romaji);
-            for (line, (r, t)) in lines
-                .iter_mut()
-                .zip(romajis.into_iter().zip(translations))
-            {
+            for (line, (r, t)) in lines.iter_mut().zip(romajis.into_iter().zip(translations)) {
                 line.romaji = r;
                 line.translation = t;
             }
@@ -471,10 +467,7 @@ fn enrich_lyrics_data(
             let mut lines = lines_arc.to_vec();
             let texts: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
             let (romajis, translations) = enrich_lines(agent, &texts, translate_lang, need_romaji);
-            for (line, (r, t)) in lines
-                .iter_mut()
-                .zip(romajis.into_iter().zip(translations))
-            {
+            for (line, (r, t)) in lines.iter_mut().zip(romajis.into_iter().zip(translations)) {
                 line.romaji = r;
                 line.translation = t;
             }
@@ -599,7 +592,7 @@ fn fetch_lyrics(
 }
 
 const LRCLIB_USER_AGENT: &str =
-    "LiebertDynamicIsland/0.1.7 (https://github.com/Zahwan316/liebert-dynamic-island)";
+    "LiebertDynamicIsland/0.1.8 (https://github.com/Zahwan316/liebert-dynamic-island)";
 
 fn query_lrclib_get(
     agent: &Agent,
@@ -654,8 +647,14 @@ fn rank_search_results(
     let artist_l = artist_hint.trim().to_ascii_lowercase();
     let title_l = title_hint.trim().to_ascii_lowercase();
     list.sort_by(|a, b| {
-        let a_synced = a.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
-        let b_synced = b.synced_lyrics.as_ref().is_some_and(|s| !s.trim().is_empty());
+        let a_synced = a
+            .synced_lyrics
+            .as_ref()
+            .is_some_and(|s| !s.trim().is_empty());
+        let b_synced = b
+            .synced_lyrics
+            .as_ref()
+            .is_some_and(|s| !s.trim().is_empty());
 
         let a_dur_ok = target.is_none_or(|t| a.duration.is_none_or(|d| (d - t).abs() <= 20.0));
         let b_dur_ok = target.is_none_or(|t| b.duration.is_none_or(|d| (d - t).abs() <= 20.0));
@@ -881,7 +880,9 @@ fn clean_artist_name(artist: &str) -> String {
 fn primary_artist(artist: &str) -> String {
     let lower = artist.to_ascii_lowercase();
     let mut split_at = artist.len();
-    for sep in [", ", " & ", " / ", " x ", " × ", " feat. ", " ft. ", " with "] {
+    for sep in [
+        ", ", " & ", " / ", " x ", " × ", " feat. ", " ft. ", " with ",
+    ] {
         if let Some(idx) = lower.find(sep) {
             split_at = split_at.min(idx);
         }
@@ -993,9 +994,7 @@ mod tests {
 
     #[test]
     fn active_karaoke_computes_line_and_word_progress() {
-        let lines = parse_lrc(
-            "[00:00.00]<00:00.00>La <00:01.00>la\n[00:02.00]Next line",
-        );
+        let lines = parse_lrc("[00:00.00]<00:00.00>La <00:01.00>la\n[00:02.00]Next line");
         let data = LyricsData::Synced(Arc::from(lines));
         let mid = active_karaoke(&data, 1000).expect("active line");
         assert_eq!(mid.text, "La la");
@@ -1067,11 +1066,17 @@ mod tests {
             strip_title_noise("Overdose (Official Music Video) [feat. Someone] | Channel"),
             "Overdose"
         );
-        assert_eq!(strip_title_noise("Song (Night Version) (Remastered 2023)"), "Song (Night Version)");
+        assert_eq!(
+            strip_title_noise("Song (Night Version) (Remastered 2023)"),
+            "Song (Night Version)"
+        );
         assert_eq!(clean_artist_name("YOASOBI - Topic"), "YOASOBI");
 
         let from_youtube = build_search_candidates("", "Natori - Overdose (official audio)");
-        assert_eq!(from_youtube[0], ("Natori".to_owned(), "Overdose".to_owned()));
+        assert_eq!(
+            from_youtube[0],
+            ("Natori".to_owned(), "Overdose".to_owned())
+        );
 
         let multi = build_search_candidates("Artist A, Artist B", "Track Name (feat. Artist B)");
         assert!(multi.contains(&("Artist A, Artist B".to_owned(), "Track Name".to_owned())));

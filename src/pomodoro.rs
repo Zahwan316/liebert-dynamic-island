@@ -123,7 +123,11 @@ impl PomodoroTimer {
     }
 
     pub fn format_mm_ss(&self) -> String {
-        format!("{:02}:{:02}", self.remaining_secs / 60, self.remaining_secs % 60)
+        format!(
+            "{:02}:{:02}",
+            self.remaining_secs / 60,
+            self.remaining_secs % 60
+        )
     }
 
     fn phase_duration_secs(&self, phase: PomodoroPhase) -> u64 {

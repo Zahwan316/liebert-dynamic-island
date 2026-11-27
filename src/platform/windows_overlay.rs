@@ -29,9 +29,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassW, SM_CXSCREEN, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SetProcessDPIAware, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
     ULW_ALPHA, UpdateLayeredWindow, WHEEL_DELTA, WM_APP, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_QUIT, WM_HOTKEY, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR};
 
@@ -95,7 +95,9 @@ unsafe extern "system" fn layered_wnd_proc(
             WM_MOUSEMOVE => {
                 state
                     .pending_events
-                    .push(Event::PointerMoved(lparam_to_logical_pos(lparam, state.ppp)));
+                    .push(Event::PointerMoved(lparam_to_logical_pos(
+                        lparam, state.ppp,
+                    )));
                 state.needs_redraw = true;
                 return LRESULT(0);
             }
@@ -671,7 +673,10 @@ fn run_layered_loop(
                 if !screen_dc.is_invalid() {
                     if let Ok(pixels) = dib.ensure_size(screen_dc, 1, 1) {
                         pixels[..4].fill(0);
-                        let pt_dst = POINT { x: win_x_px, y: win_y_px };
+                        let pt_dst = POINT {
+                            x: win_x_px,
+                            y: win_y_px,
+                        };
                         let sz = SIZE { cx: 1, cy: 1 };
                         let pt_src = POINT { x: 0, y: 0 };
                         let blend = BLENDFUNCTION {
@@ -732,7 +737,11 @@ fn run_layered_loop(
                 || win_y_px != committed_y;
 
             if geometry_changed
-                || should_draw(wnd_state.needs_redraw, step.repaint_after, last_draw.elapsed())
+                || should_draw(
+                    wnd_state.needs_redraw,
+                    step.repaint_after,
+                    last_draw.elapsed(),
+                )
             {
                 last_draw = Instant::now();
                 let raw_input = RawInput {
@@ -870,7 +879,15 @@ struct TaskbarLayeredWindow {
     canvas: Option<SoftCanvas>,
     egui_ctx: Option<egui::Context>,
     last_metrics: Option<SystemMetrics>,
-    last_cfg_key: Option<(bool, bool, bool, bool, bool, crate::config::TaskbarFormat, crate::config::TaskbarPosition)>,
+    last_cfg_key: Option<(
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+        crate::config::TaskbarFormat,
+        crate::config::TaskbarPosition,
+    )>,
     visible: bool,
 }
 
@@ -983,8 +1000,12 @@ impl TaskbarLayeredWindow {
 
         let Some(hwnd) = self.hwnd else { return };
         let Some(dib) = self.dib.as_mut() else { return };
-        let Some(canvas) = self.canvas.as_mut() else { return };
-        let Some(ctx) = self.egui_ctx.as_ref() else { return };
+        let Some(canvas) = self.canvas.as_mut() else {
+            return;
+        };
+        let Some(ctx) = self.egui_ctx.as_ref() else {
+            return;
+        };
 
         let logical_size = ui::taskbar::estimate_taskbar_size(config, metrics);
         let (x_px, y_px, w_px, h_px) =
