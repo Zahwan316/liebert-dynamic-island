@@ -10,6 +10,29 @@ tags:
 
 ## 2026-11-27
 
+### Added (v0.1.11)
+
+- `src/config.rs`, `src/platform/{mod,linux,windows}.rs`, `src/ui/{icons,mod,settings}.rs`, `src/main.rs`: **Maskot idle pelacak kursor** (Windows & Linux). Ditambahkan mode `IdleDisplayMode::Mascot` dan toggle `Config::show_idle_mascot` (default `true`); `icons::paint_mascot()` menggambar wajah kapsul putih minimal (`L` + `I` mata bergerak mengikuti posisi kursor ternormalisasi via Hyprland/X11 `cursor_screen_info` di Linux dan `GetCursorPos` + DPI di Windows, serta mulut kapsul berlubang + kapsul vertikal kecil di kanan). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-029).
+- `src/platform/wayland_settings.rs`, `src/platform/windows_settings.rs`, `src/platform/mod.rs`, `src/ui/settings.rs`: **Renderer Settings CPU murni (`SoftCanvas`)** pada Linux Wayland (`wl_shm` + `xdg_shell` CSD/SSD) dan Windows Win32 (`CreateDIBSection` + `BitBlt`), mempertahankan `eframe` hanya untuk fallback X11 sehingga driver OpenGL/EGL/LLVM tidak lagi dimuat pada proses Settings utama.
+
+### Changed (v0.1.11)
+
+- `src/ui/mod.rs`, `src/ui/icons.rs`: **Tab Home bergaya Bento Grid** (Windows & Linux) dengan kartu metrik membulat dan `paint_pill_bar` chart (CPU, RAM, Disk, Tasks, Calendar/Timer) serta status ringkas bebas teks/ikon berlebih.
+- `src/ui/settings.rs`: **Desain ulang dashboard Bento Grid** (Windows & Linux) dengan sidebar ikon + mini-maskot live di kiri, kartu 2 kolom adaptif (`bento_2col` / `bento_card`), pill toggle chip, pill chart indikator baterai/konfigurasi, dan pemindaian font terinstal secara lazy.
+- `Cargo.toml`, `Cargo.lock`, `src/ui/mod.rs`, `src/ui/taskbar.rs`, `src/platform/{wayland_layer,windows_overlay}.rs`, `src/main.rs`: **Task RAM `< 10 MB`** — `memmap2::Mmap` (`load_font_blob`) memetakan font sistem secara shareable tanpa menumpuk blob `NotoSansCJK` 19–20 MB ke heap, fitur `default_fonts` `eframe` dinonaktifkan (`apply_configured_fonts_light` menunda pemuatan `LyricsBold` dan taskbar memakai label ASCII `CPU`/`RAM`/`DSK`), batas `max_texture_side` diturunkan dari `2048` ke `1024`, `SlotPool` Wayland menyusut ke 512 KB setelah collapse, dan Settings dipindah ke CPU rasterizer. Lihat **Measured (v0.1.11)**.
+- `Cargo.toml`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.11`**; `Liebert_Dynamic_Island-0.1.11-x86_64.AppImage` + `.tar.gz` Linux dan `liebert-dynamic-island-windows-x86_64-setup.exe` + `.zip` Windows (via Docker `rust:slim` + `gcc-mingw-w64-x86-64` + `nsis`) dibangun ulang. `cargo test` **75 passed**, `cargo fmt --all -- --check` bersih, `cargo clippy --all-targets -- -D warnings` bersih, dan `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` bersih.
+
+### Fixed (v0.1.11)
+
+- `src/ui/mod.rs`, `src/platform/linux.rs`: **Perbaikan bug putih lirik karaoke nge-blink** (Windows & Linux) — `paint_karaoke_in_rect` dan `render_wrapped_karaoke` kini memisahkan region clip kiri (putih) dan kanan (redup) secara saling lepas agar tepi anti-aliased tidak double-blend/pop di `p >= 0.999`; `scroll_x` menggunakan lebar galai utuh (bukan `.min(avail_w)`); `PillLyricTransition` melacak `prev_progress` alih-alih melompat ke `1.0`; mundur waktu media `< 750 ms` pada `PlatformEvent::Media` dan `periodic_lock` MPRIS2 disaring agar garis progress tidak berkedip mundur setiap 2,5 detik.
+- Live Wayland smoke test & fix `epaint`: batas `max_texture_side` dinaikkan dari `512` ke `1024` karena `epaint::TextureAtlas::new` meng-assert `size[0] >= 1024`.
+
+### Measured (v0.1.11)
+
+- **Settings Wayland CPU (`--settings`, host Hyprland Linux):** turun drastis dari `VmRSS 90,2 MB` / `Pss 78,2 MB` → **`Rss 17,63 MB` (`18052 kB`), `Pss 13,05 MB` (`13363 kB`)**; heap + anon private (`Pss_Anon`/`Private_Dirty`) hanya **`3,51 MB`** (`[heap] 1240 kB` + `[anon] 576 kB`), shmem `memfd` **`1,27 MB` PSS**, dan `libnvidia`/`libLLVM` **0 KB**.
+- **Demo + Overlay Wayland (`--demo` settled idle + mascot, host Linux):** turun dari `VmRSS 63,1 MB` / `Pss 59,0 MB` → **`Rss 24,63 MB` (`25220 kB`), `Pss 19,36 MB` (`19824 kB`)**; `Pss_Anon`/`Private_Dirty` hanya **`5,75 MB`**, `NotoSansCJK` via `mmap` hanya memetakan `428 kB` PSS (`Regular`) + `340 kB` PSS (`Bold`) halaman font terpakai.
+- **Status target `< 10 MB`:** **Belum tercapai pada total RSS/PSS** (walaupun memori private anon/heap sudah `3,51 MB` dan `5,75 MB`). Penghalang utama kini adalah **halaman kode/rodata binary monolitik** (`RssFile` binary sendiri `9,60 MB` PSS di `--settings` dan `13,70 MB` PSS di `--demo`) karena `eframe`/`egui_glow`/`winit`/`rustls`/`zbus`/`tray-icon` masih dikompilasi ke satu executable 17 MB. RSS Windows belum terukur dari host Linux (Settings Win32 kini juga CPU `BitBlt` bebas GL). Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-029) dan [[02 - Daftar Tugas & Backlog]].
+
 ### Added (v0.1.10)
 
 - `src/ui/mod.rs`: **Animasi pergantian tab** (both) untuk next/prev via arrow keyboard, chevron samping, dan click-through Home/tombol Battery. `TabSwitch` menyimpan arah + `Instant`; konten baru masuk dengan fade (180 ms) dan sedikit slide dari sisi navigasi. Hanya meminta repaint cepat selama transisi—idle tidak berubah. Test `tab_transition_slides_in_from_nav_side_and_finishes`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-028).

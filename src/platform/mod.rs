@@ -185,6 +185,16 @@ pub struct FontFileSpec {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct CursorScreenInfo {
+    pub cursor_x: f32,
+    pub cursor_y: f32,
+    pub screen_x: f32,
+    pub screen_y: f32,
+    pub screen_w: f32,
+    pub screen_h: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct HoverPollInput<'a> {
     pub window_title: &'a str,
     pub ctx_hovered: bool,
@@ -205,11 +215,17 @@ mod windows;
 #[cfg(windows)]
 pub mod windows_overlay;
 
+#[cfg(windows)]
+pub mod windows_settings;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
 #[cfg(target_os = "linux")]
 pub mod wayland_layer;
+
+#[cfg(target_os = "linux")]
+pub mod wayland_settings;
 
 pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + Send + Sync>) {
     #[cfg(windows)]
@@ -458,6 +474,20 @@ pub fn is_cursor_in_screen_rect(
     #[cfg(not(windows))]
     {
         let _ = (left_px, top_px, right_px, bottom_px);
+        None
+    }
+}
+
+pub fn cursor_screen_info(pixels_per_point: f32) -> Option<CursorScreenInfo> {
+    #[cfg(windows)]
+    return windows::cursor_screen_info(pixels_per_point);
+
+    #[cfg(target_os = "linux")]
+    return linux::cursor_screen_info(pixels_per_point);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = pixels_per_point;
         None
     }
 }

@@ -570,7 +570,7 @@ fn run_layered_loop(
     unsafe { ReleaseDC(None, screen_dc) };
 
     let egui_ctx = egui::Context::default();
-    ui::apply_configured_fonts(&egui_ctx, &initial_config.font_name);
+    ui::apply_configured_fonts_light(&egui_ctx, &initial_config.font_name);
     if let Some(snap) = initial_snapshot {
         app.apply_snapshot(snap, &egui_ctx);
     }
@@ -749,6 +749,7 @@ fn run_layered_loop(
                         Pos2::ZERO,
                         Vec2::new(want_w_log, want_h_log),
                     )),
+                    max_texture_side: Some(1024),
                     time: Some(start_time.elapsed().as_secs_f64()),
                     events: std::mem::take(&mut wnd_state.pending_events),
                     ..Default::default()
@@ -991,7 +992,7 @@ impl TaskbarLayeredWindow {
                 return;
             };
             let ctx = egui::Context::default();
-            ui::apply_configured_fonts(&ctx, &config.font_name);
+            ui::apply_configured_fonts_light(&ctx, &config.font_name);
             self.hwnd = Some(hwnd);
             self.dib = Some(dib);
             self.canvas = Some(SoftCanvas::new());
@@ -1016,6 +1017,7 @@ impl TaskbarLayeredWindow {
 
         let raw_input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, logical_size)),
+            max_texture_side: Some(1024),
             time: Some(start_time.elapsed().as_secs_f64()),
             ..Default::default()
         };

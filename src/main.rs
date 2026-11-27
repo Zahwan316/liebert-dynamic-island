@@ -105,7 +105,17 @@ fn main() -> ExitCode {
             0.0
         };
         let initial_w = config.idle_width * config.scale + ear_w;
-        let initial_h = 30.0 * config.scale;
+        let initial_h = match config.idle_display {
+            crate::config::IdleDisplayMode::Mascot => 38.0 * config.scale,
+            crate::config::IdleDisplayMode::Auto
+            | crate::config::IdleDisplayMode::Clock
+            | crate::config::IdleDisplayMode::Minimal
+                if config.show_idle_mascot =>
+            {
+                34.0 * config.scale
+            }
+            _ => 30.0 * config.scale,
+        };
         let initial_y = if config.notch_dock_mode {
             0.0
         } else {
@@ -357,7 +367,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
             WINDOW_TITLE,
             options,
             Box::new(move |cc| {
-                ui::apply_configured_fonts(&cc.egui_ctx, &config.font_name);
+                ui::apply_configured_fonts_light(&cc.egui_ctx, &config.font_name);
                 let egui_ctx = cc.egui_ctx.clone();
                 let wake: Arc<dyn Fn() + Send + Sync> =
                     Arc::new(move || egui_ctx.request_repaint());

@@ -846,7 +846,6 @@ dependencies = [
  "bytemuck",
  "ecolor",
  "emath",
- "epaint_default_fonts",
  "font-types",
  "harfrust",
  "log",
@@ -861,12 +860,6 @@ dependencies = [
  "unicode-segmentation",
  "vello_cpu",
 ]
-
-[[package]]
-name = "epaint_default_fonts"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfc1cc505827f4c23eedc297975a0fd038268d41293f389dd8ff3b574aefab19"
 
 [[package]]
 name = "equivalent"
@@ -1562,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "liebert-dynamic-island"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "any_ascii",
  "calloop 0.13.0",
@@ -1575,6 +1568,7 @@ dependencies = [
  "futures-util",
  "image",
  "kakasi",
+ "memmap2 0.9.12",
  "serde",
  "serde_json",
  "smithay-client-toolkit 0.19.2",
@@ -1583,6 +1577,7 @@ dependencies = [
  "ureq",
  "wayland-client",
  "windows",
+ "x11rb",
  "zbus 6.5.0",
 ]
 

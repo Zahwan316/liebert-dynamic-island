@@ -27,6 +27,7 @@ struct MonitorInfo {
     x: f32,
     y: f32,
     logical_width: f32,
+    logical_height: f32,
     scale: f32,
 }
 
@@ -36,6 +37,7 @@ struct LinuxOverlayCache {
     last_topmost_sync: Option<Instant>,
     last_hover_probe: Option<(Instant, bool)>,
     last_trigger_probe: Option<(Instant, bool)>,
+    last_cursor_probe: Option<(Instant, super::CursorScreenInfo)>,
 }
 
 fn overlay_cache() -> &'static Mutex<LinuxOverlayCache> {
@@ -47,6 +49,7 @@ fn overlay_cache() -> &'static Mutex<LinuxOverlayCache> {
             last_topmost_sync: None,
             last_hover_probe: None,
             last_trigger_probe: None,
+            last_cursor_probe: None,
         })
     })
 }
@@ -103,11 +106,13 @@ fn hypr_focused_monitor_cached() -> Option<MonitorInfo> {
     let x = mon.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let y = mon.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let width = mon.get("width").and_then(|v| v.as_f64()).unwrap_or(1920.0) as f32;
+    let height = mon.get("height").and_then(|v| v.as_f64()).unwrap_or(1080.0) as f32;
     let scale = (mon.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32).max(0.5);
     let info = MonitorInfo {
         x,
         y,
         logical_width: width / scale,
+        logical_height: height / scale,
         scale,
     };
     if let Ok(mut guard) = overlay_cache().lock() {
@@ -122,6 +127,84 @@ fn hypr_cursor_pos() -> Option<(f32, f32)> {
     let x = xs.trim().parse::<f32>().ok()?;
     let y = ys.trim().parse::<f32>().ok()?;
     Some((x, y))
+}
+
+fn x11_cursor_screen_info(pixels_per_point: f32) -> Option<super::CursorScreenInfo> {
+    std::env::var_os("DISPLAY")?;
+    type X11State = Option<(x11rb::rust_connection::RustConnection, u32, f32, f32)>;
+    static X11_CONN: OnceLock<Mutex<X11State>> = OnceLock::new();
+    let cell = X11_CONN.get_or_init(|| {
+        use x11rb::connection::Connection as _;
+        let Ok((conn, screen_num)) = x11rb::connect(None) else {
+            return Mutex::new(None);
+        };
+        let (root, w_px, h_px) = {
+            let setup = conn.setup();
+            let Some(screen) = setup.roots.get(screen_num) else {
+                return Mutex::new(None);
+            };
+            (
+                screen.root,
+                f32::from(screen.width_in_pixels).max(1.0),
+                f32::from(screen.height_in_pixels).max(1.0),
+            )
+        };
+        Mutex::new(Some((conn, root, w_px, h_px)))
+    });
+    let Ok(mut guard) = cell.lock() else {
+        return None;
+    };
+    let (conn, root, w_px, h_px) = guard.as_mut()?;
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    let Ok(cookie) = conn.query_pointer(*root) else {
+        *guard = None;
+        return None;
+    };
+    let Ok(reply) = cookie.reply() else {
+        *guard = None;
+        return None;
+    };
+    let ppp = pixels_per_point.max(1.0);
+    Some(super::CursorScreenInfo {
+        cursor_x: f32::from(reply.root_x) / ppp,
+        cursor_y: f32::from(reply.root_y) / ppp,
+        screen_x: 0.0,
+        screen_y: 0.0,
+        screen_w: *w_px / ppp,
+        screen_h: *h_px / ppp,
+    })
+}
+
+pub fn cursor_screen_info(pixels_per_point: f32) -> Option<super::CursorScreenInfo> {
+    if let Ok(guard) = overlay_cache().lock()
+        && let Some((at, info)) = guard.last_cursor_probe
+        && at.elapsed() < Duration::from_millis(24)
+    {
+        return Some(info);
+    }
+
+    let info =
+        if let (Some((cx, cy)), Some(mon)) = (hypr_cursor_pos(), hypr_focused_monitor_cached()) {
+            Some(super::CursorScreenInfo {
+                cursor_x: cx,
+                cursor_y: cy,
+                screen_x: mon.x,
+                screen_y: mon.y,
+                screen_w: mon.logical_width.max(1.0),
+                screen_h: mon.logical_height.max(1.0),
+            })
+        } else if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            x11_cursor_screen_info(pixels_per_point)
+        } else {
+            None
+        };
+
+    if let Some(info) = info
+        && let Ok(mut guard) = overlay_cache().lock()
+    {
+        guard.last_cursor_probe = Some((Instant::now(), info));
+    }
+    info
 }
 
 pub fn should_send_outer_position() -> bool {
@@ -707,7 +790,7 @@ impl NotificationServer {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("liebert-dynamic-island", "Liebert", "0.1.10", "1.2")
+        ("liebert-dynamic-island", "Liebert", "0.1.11", "1.2")
     }
 }
 
@@ -1080,15 +1163,17 @@ fn evaluate_mpris_sync(
     let forward_seek = actual_ms > expected_ms.saturating_add(300);
     let rewind_or_restart = actual_ms.saturating_add(900) < expected_ms
         || actual_ms < st.position_ms.saturating_sub(250);
-    let persistent_lag = if expected_ms.saturating_sub(actual_ms) >= 250 {
+    let persistent_lag = if expected_ms.saturating_sub(actual_ms) >= 350 {
         st.lag_count = st.lag_count.saturating_add(1);
         st.lag_count >= 2
     } else {
         st.lag_count = 0;
         false
     };
-    let periodic_lock =
-        now.saturating_duration_since(st.emitted_at) >= Duration::from_millis(2500) && diff >= 80;
+    // Only snap forward on periodic lock; pulling backward on small jitter causes karaoke flicker.
+    let periodic_lock = now.saturating_duration_since(st.emitted_at) >= Duration::from_millis(2500)
+        && actual_ms >= expected_ms
+        && diff >= 80;
 
     if forward_seek || rewind_or_restart || persistent_lag || periodic_lock {
         st.position_ms = actual_ms;
@@ -1587,7 +1672,7 @@ fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
                 .get(&candidate)
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.10",
+                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.11",
                 )
                 .header(
                     "Accept",

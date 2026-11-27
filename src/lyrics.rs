@@ -592,7 +592,7 @@ fn fetch_lyrics(
 }
 
 const LRCLIB_USER_AGENT: &str =
-    "LiebertDynamicIsland/0.1.10 (https://github.com/Zahwan316/liebert-dynamic-island)";
+    "LiebertDynamicIsland/0.1.11 (https://github.com/Zahwan316/liebert-dynamic-island)";
 
 fn query_lrclib_get(
     agent: &Agent,

@@ -53,14 +53,16 @@ liebert-dynamic-island/
     ├── ui/
     │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded tabs incl. Battery), spring physics, AA notch mesh, donut charts, side-nav gutters, & UI loop
     │   ├── soft_render.rs       # Pure-Rust CPU egui ClippedPrimitive rasterizer (premultiplied BGRA/RGBA)
-    │   ├── icons.rs             # Crisp Painter-drawn vector icons & responsive icon buttons
-    │   └── settings.rs          # 7 grouped Settings tabs (incl. Battery/Startup) + standalone --settings runner (Unix socket / TCP)
+    │   ├── icons.rs             # Crisp Painter-drawn vector icons, responsive buttons & cursor-tracking idle mascot
+    │   └── settings.rs          # Dashboard Bento Grid Settings tabs (incl. Mascot/Battery/Startup) + --settings runner
     └── platform/
-        ├── mod.rs               # Facade lintas OS (overlay, topmost, hover, font, MediaTrack, PlatformEvent, set_autostart)
-        ├── windows.rs           # Win32 hover/no-activate/DWM, fullscreen watcher, WinRT Notifications & SMTC, HKCU Run autostart
+        ├── mod.rs               # Facade lintas OS (overlay, cursor_screen_info, topmost, hover, font, MediaTrack, PlatformEvent, set_autostart)
+        ├── windows.rs           # Win32 hover/cursor/no-activate/DWM, fullscreen watcher, WinRT Notifications & SMTC, HKCU Run autostart
         ├── windows_overlay.rs   # Native Win32 UpdateLayeredWindow + DIB SoftCanvas overlay runner
-        ├── linux.rs             # D-Bus Notifications + passive monitor fallback, MPRIS2 cached proxy, Hyprland IPC, XDG autostart, & fontconfig lookup
-        └── wayland_layer.rs     # Native Wayland wlr-layer-shell wl_shm + SoftCanvas overlay & recovery loop
+        ├── windows_settings.rs  # Native Win32 CreateDIBSection + BitBlt SoftCanvas standalone Settings runner
+        ├── linux.rs             # D-Bus Notifications + passive monitor fallback, MPRIS2 cached proxy, Hyprland/X11 IPC, XDG autostart, & fontconfig lookup
+        ├── wayland_layer.rs     # Native Wayland wlr-layer-shell wl_shm + SoftCanvas overlay & recovery loop
+        └── wayland_settings.rs  # Native Wayland xdg_shell wl_shm + SoftCanvas standalone Settings runner (tanpa OpenGL/LLVM)
 ```
 
 ### Distribusi & Rilis
@@ -101,6 +103,6 @@ pub struct NotificationItem {
 ## Target Non-Fungsional
 - **Startup Time:** `< 500 ms` hingga pill tampil.
 - **Notification Latency:** `< 150 ms` dari event OS hingga frame animasi masuk.
-- **Resource Footprint:** Permintaan terbaru pengguna adalah **`< 10 MB` RAM idle** (lebih ketat dari target lama `< 25 MB` idle / `< 50 MB` expanded), `< 0.5%` CPU idle (event-driven, tanpa busy-polling). Pengukuran v0.1.10 overlay Wayland/`--demo`: `VmRSS 63,1 MB` / `Pss 59,0 MB`; Settings `VmRSS 90,2 MB` / `Pss 78,2 MB` pada host NVIDIA. Target `< 10 MB` **belum tercapai** dan tercatat sebagai utang teknis di ADR-028. Dedup blob font dan `exec` launcher Settings menghilangkan salinan heap/proses tambahan, tetapi region anonymous ~52 MB dari dependency non-egui dan `RssFile ~68 MB` driver GL tetap mendominasi; menurut ADR-028 perlu renderer CPU + binary split untuk menembus batas tersebut.
+- **Resource Footprint:** Permintaan terbaru pengguna adalah **`< 10 MB` RAM** untuk overlay dan Settings (`< 0.5%` CPU idle). Pada v0.1.11 (`SoftCanvas` Settings + `memmap2` + penghapusan `default_fonts` + `max_texture_side=1024`), pengukuran Wayland `--settings` turun dari `90,2 MB` ke **`17,63 MB` RSS / `13,05 MB` PSS** (`3,51 MB` anon/private, 0 KB driver GL), dan `--demo` turun dari `63,1 MB` ke **`24,63 MB` RSS / `19,36 MB` PSS** (`5,75 MB` anon/private). Target `< 10 MB` total proses **belum tercapai** terutama karena `RssFile` binary monolitik 17 MB (`9,6–13,7 MB` PSS) masih menautkan `eframe`/`egui_glow`/`winit`/`rustls`/`zbus` dalam satu executable (utang teknis ADR-029).
 - **Rendering & DPI:** `>= 60 FPS` saat animasi transisi; Per-Monitor DPI Aware v2 (Windows) & fractional scaling (Linux).
 - **Privasi & Jaringan:** Data notifikasi OS diproses 100% lokal tanpa telemetri maupun log persisten. Permintaan jaringan keluar bersifat opsional dan terbatas pada metadata lagu (`artist`/`title`) ke `lrclib.net` (saat `show_lyrics` aktif) serta fetch URL `.ics` Google Calendar yang dikonfigurasi pengguna.

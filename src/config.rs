@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub enum IdleDisplayMode {
     #[default]
     Auto,
+    Mascot,
     Clock,
     Lyrics,
     NextEvent,
@@ -20,6 +21,7 @@ impl IdleDisplayMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::Auto => "Auto (Lyrics -> Clock)",
+            Self::Mascot => "Mascot (Eye Tracking)",
             Self::Clock => "Clock",
             Self::Lyrics => "Lyrics / Now Playing",
             Self::NextEvent => "Next Calendar Event",
@@ -116,6 +118,7 @@ pub struct Config {
     pub hide_in_fullscreen: bool,
     pub hide_in_windowed_fullscreen: bool,
     pub idle_display: IdleDisplayMode,
+    pub show_idle_mascot: bool,
     pub clock_timezone: String,
     pub clock_24h: bool,
     pub clock_show_seconds: bool,
@@ -174,6 +177,7 @@ impl Default for Config {
             hide_in_fullscreen: true,
             hide_in_windowed_fullscreen: true,
             idle_display: IdleDisplayMode::Auto,
+            show_idle_mascot: true,
             clock_timezone: "Local".to_owned(),
             clock_24h: true,
             clock_show_seconds: false,
@@ -321,6 +325,7 @@ mod tests {
         assert_eq!(cfg.auto_hide_delay_secs, 5);
         assert!(cfg.hide_in_fullscreen);
         assert_eq!(cfg.idle_display, IdleDisplayMode::Auto);
+        assert!(cfg.show_idle_mascot);
         assert_eq!(cfg.clock_timezone, "Local");
         assert!(cfg.show_notifications && cfg.show_lyrics && cfg.show_todo && cfg.show_calendar);
         assert!(cfg.dynamic_album_color && cfg.compact_album_gradient && cfg.show_pill_translation);
@@ -348,7 +353,8 @@ mod tests {
             translate_lyrics: true,
             lyric_translate_lang: "en".to_owned(),
             lyric_offset_ms: -450,
-            idle_display: IdleDisplayMode::Clock,
+            idle_display: IdleDisplayMode::Mascot,
+            show_idle_mascot: false,
             clock_timezone: "Asia/Jakarta".to_owned(),
             clock_24h: false,
             clock_show_seconds: true,
@@ -374,6 +380,7 @@ mod tests {
         assert_eq!(parsed.top_offset_px, 18.0);
         assert_eq!(parsed.collapse_timeout_secs, 7);
         assert_eq!(parsed.scale, 1.0);
+        assert!(parsed.show_idle_mascot);
         assert_eq!(parsed.text_align, TextAlign::Left);
         assert_eq!(parsed.bg_color, Config::default().bg_color);
     }

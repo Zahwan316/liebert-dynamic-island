@@ -664,13 +664,15 @@ pub fn try_run_layer_shell(
     }
 
     // 512 KB initial SHM pool covers the idle/compact pill without GPU driver overhead.
-    let mut pool = SlotPool::new(512 * 1024, &wl_state.shm_state)
+    const BASE_SHM_POOL_BYTES: usize = 512 * 1024;
+    let mut pool = SlotPool::new(BASE_SHM_POOL_BYTES, &wl_state.shm_state)
         .map_err(|e| format!("wl_shm SlotPool init failed: {e}"))?;
+    let mut pool_peak_frame_bytes = 0usize;
     let mut soft_canvas = SoftCanvas::new();
     let mut active_buffer: Option<Buffer> = None;
 
     let egui_ctx = egui::Context::default();
-    ui::apply_configured_fonts(&egui_ctx, &config.font_name);
+    ui::apply_configured_fonts_light(&egui_ctx, &config.font_name);
 
     let mut event_loop: EventLoop<WaylandState> =
         EventLoop::try_new().map_err(|e| format!("calloop init failed: {e}"))?;
@@ -934,6 +936,7 @@ pub fn try_run_layer_shell(
                 Pos2::ZERO,
                 Vec2::new(want_w as f32, want_h as f32),
             )),
+            max_texture_side: Some(1024),
             time: Some(start_time.elapsed().as_secs_f64()),
             events: std::mem::take(&mut wl_state.pending_events),
             ..Default::default()
@@ -948,6 +951,16 @@ pub fn try_run_layer_shell(
         soft_canvas.update_textures_before_paint(&mut full_output.textures_delta);
 
         let stride = (phys_w_px * 4) as i32;
+        let frame_bytes = (phys_w_px as usize).saturating_mul(phys_h_px as usize) * 4;
+        pool_peak_frame_bytes = pool_peak_frame_bytes.max(frame_bytes);
+        if frame_bytes <= BASE_SHM_POOL_BYTES / 3 && pool_peak_frame_bytes > BASE_SHM_POOL_BYTES {
+            // Reclaim expanded-card SHM pages once collapsed back to the idle pill.
+            active_buffer = None;
+            if let Ok(fresh) = SlotPool::new(BASE_SHM_POOL_BYTES, &wl_state.shm_state) {
+                pool = fresh;
+                pool_peak_frame_bytes = frame_bytes;
+            }
+        }
         if let Ok((buffer, bytes)) = pool.create_buffer(
             phys_w_px as i32,
             phys_h_px as i32,

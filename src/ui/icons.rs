@@ -53,6 +53,100 @@ pub fn icon_button(
     resp
 }
 
+pub fn paint_mascot(painter: &egui::Painter, rect: Rect, eye_offset_norm: Vec2, color: Color32) {
+    let h = rect.height().min(rect.width()).max(8.0);
+    let c = rect.center();
+    let u = h / 24.0;
+
+    let offset_len = eye_offset_norm.length();
+    let norm = if offset_len > 1.0 {
+        eye_offset_norm / offset_len
+    } else {
+        eye_offset_norm
+    };
+    let eye_dx = norm.x * 2.8 * u;
+    let eye_dy = norm.y * 2.0 * u;
+    let mouth_dx = eye_dx * 0.14;
+    let mouth_dy = eye_dy * 0.14;
+
+    let eye_h = 10.2 * u;
+    let eye_t = (3.0 * u).max(1.8);
+    let eye_cap = (eye_t * 0.5).round().clamp(1.0, 16.0) as u8;
+    let l_width = 6.6 * u;
+    let eye_gap = 4.4 * u;
+    let total_eyes_w = l_width + eye_gap + eye_t;
+
+    let eyes_left = c.x - total_eyes_w * 0.5 + eye_dx;
+    let eyes_top = c.y - 9.8 * u + eye_dy;
+
+    // Left eye ("L"): split into non-overlapping vertical stem + horizontal foot so alpha fades cleanly.
+    let stem_rect = Rect::from_min_max(
+        Pos2::new(eyes_left, eyes_top),
+        Pos2::new(eyes_left + eye_t, eyes_top + eye_h - eye_t),
+    );
+    painter.rect_filled(
+        stem_rect,
+        CornerRadius {
+            nw: eye_cap,
+            ne: eye_cap,
+            sw: 0,
+            se: 0,
+        },
+        color,
+    );
+    let foot_rect = Rect::from_min_max(
+        Pos2::new(eyes_left, eyes_top + eye_h - eye_t),
+        Pos2::new(eyes_left + l_width, eyes_top + eye_h),
+    );
+    painter.rect_filled(
+        foot_rect,
+        CornerRadius {
+            nw: 0,
+            ne: eye_cap,
+            sw: eye_cap,
+            se: eye_cap,
+        },
+        color,
+    );
+
+    // Right eye ("I"): vertical rounded capsule.
+    let right_eye_x = eyes_left + l_width + eye_gap;
+    let right_eye_rect = Rect::from_min_max(
+        Pos2::new(right_eye_x, eyes_top),
+        Pos2::new(right_eye_x + eye_t, eyes_top + eye_h),
+    );
+    painter.rect_filled(right_eye_rect, CornerRadius::same(eye_cap), color);
+
+    // Mouth: hollow horizontal pill + solid vertical pill on the right.
+    let mouth_h = (4.8 * u).max(3.2);
+    let mouth_pill_w = 10.5 * u;
+    let mouth_gap = 1.6 * u;
+    let mouth_dot_w = (2.2 * u).max(1.5);
+    let total_mouth_w = mouth_pill_w + mouth_gap + mouth_dot_w;
+    let mouth_left = c.x - total_mouth_w * 0.5 + mouth_dx;
+    let mouth_top = c.y + 4.4 * u + mouth_dy;
+
+    let mouth_pill_rect = Rect::from_min_size(
+        Pos2::new(mouth_left, mouth_top),
+        Vec2::new(mouth_pill_w, mouth_h),
+    );
+    let mouth_stroke = (1.45 * u).clamp(1.0, 2.8);
+    let mouth_cap = (mouth_h * 0.5).round().clamp(1.0, 16.0) as u8;
+    painter.rect_stroke(
+        mouth_pill_rect,
+        CornerRadius::same(mouth_cap),
+        Stroke::new(mouth_stroke, color),
+        egui::StrokeKind::Inside,
+    );
+
+    let mouth_dot_rect = Rect::from_min_size(
+        Pos2::new(mouth_left + mouth_pill_w + mouth_gap, mouth_top),
+        Vec2::new(mouth_dot_w, mouth_h),
+    );
+    let dot_cap = (mouth_dot_w * 0.5).round().clamp(1.0, 12.0) as u8;
+    painter.rect_filled(mouth_dot_rect, CornerRadius::same(dot_cap), color);
+}
+
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, kind: IconKind, color: Color32) {
     let c = rect.center();
     let s = rect.width().min(rect.height());

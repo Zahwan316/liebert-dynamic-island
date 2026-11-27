@@ -43,11 +43,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWLP_WNDPROC, GetAncestor, GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow,
     GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
     HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MONITORINFOF_PRIMARY, MSG,
-    PM_REMOVE, PeekMessageW, SM_CXSCREEN, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW,
-    SetWindowPos, ShowWindow, TranslateMessage, WM_NCCALCSIZE, WNDPROC, WS_BORDER, WS_CAPTION,
-    WS_DLGFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    PM_REMOVE, PeekMessageW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WM_NCCALCSIZE, WNDPROC,
+    WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::HSTRING;
 
@@ -564,12 +564,23 @@ pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
 }
 
 pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
-    vec![FontFileSpec {
+    let mut specs = vec![FontFileSpec {
         name: "win_segoe_ui".to_owned(),
         path: "C:\\Windows\\Fonts\\segoeui.ttf".to_owned(),
-        family: FontFamilyTarget::Both,
+        family: FontFamilyTarget::Proportional,
         face_indices: &[0],
-    }]
+    }];
+    if std::path::Path::new("C:\\Windows\\Fonts\\consola.ttf").is_file() {
+        specs.push(FontFileSpec {
+            name: "win_consolas".to_owned(),
+            path: "C:\\Windows\\Fonts\\consola.ttf".to_owned(),
+            family: FontFamilyTarget::Monospace,
+            face_indices: &[0],
+        });
+    } else {
+        specs[0].family = FontFamilyTarget::Both;
+    }
+    specs
 }
 
 pub fn bold_fallback_fonts() -> Vec<FontFileSpec> {
@@ -872,6 +883,25 @@ pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool
             && pt.y >= rect.top - padding_px
             && pt.y <= rect.bottom + padding_px,
     )
+}
+
+pub fn cursor_screen_info(pixels_per_point: f32) -> Option<crate::platform::CursorScreenInfo> {
+    let screen_w_px = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    let screen_h_px = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+    if screen_w_px <= 0 || screen_h_px <= 0 {
+        return None;
+    }
+    let mut pt = POINT::default();
+    unsafe { GetCursorPos(&mut pt) }.ok()?;
+    let ppp = pixels_per_point.max(1.0);
+    Some(crate::platform::CursorScreenInfo {
+        cursor_x: pt.x as f32 / ppp,
+        cursor_y: pt.y as f32 / ppp,
+        screen_x: 0.0,
+        screen_y: 0.0,
+        screen_w: screen_w_px as f32 / ppp,
+        screen_h: screen_h_px as f32 / ppp,
+    })
 }
 
 pub fn is_cursor_in_top_trigger(
