@@ -22,6 +22,7 @@ Referensi spesifikasi produk: [[PRD-LiebertDynamicIsland-MVP]].
 ```text
 liebert-dynamic-island/
 ├── Cargo.toml
+├── CHANGELOG.md                 # Catatan rilis kronologis (generated per rilis menuju main & GitHub Releases)
 ├── LICENSE.md                   # Lisensi GPL-3.0-or-later
 ├── AGENTS.md                    # Panduan kolaborasi & aturan repo
 ├── .github/workflows/
