@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use eframe::egui::{
+use egui::{
     ClippedPrimitive, Color32, TextureFilter, TextureId, TextureOptions, TextureWrapMode,
     TexturesDelta,
 };
-use eframe::epaint::{ImageData, Mesh, Primitive, Vertex, WHITE_UV};
+use epaint::{ImageData, Mesh, Primitive, Vertex, WHITE_UV};
 
 struct SoftTexture {
     width: usize,
@@ -125,7 +125,7 @@ pub struct SoftCanvas {
     textures: HashMap<TextureId, SoftTexture>,
 }
 
-fn take_color_pixels(img: &mut Arc<eframe::egui::ColorImage>) -> Vec<Color32> {
+fn take_color_pixels(img: &mut Arc<egui::ColorImage>) -> Vec<Color32> {
     Arc::get_mut(img)
         .map(|image| std::mem::take(&mut image.pixels))
         .unwrap_or_else(|| img.pixels.clone())
@@ -502,8 +502,8 @@ fn rasterize_triangle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eframe::egui::{ColorImage, Pos2, Rect};
-    use eframe::epaint::ImageDelta;
+    use egui::{ColorImage, Pos2, Rect};
+    use epaint::ImageDelta;
     use std::sync::Arc;
 
     fn solid_quad_primitive(rect: Rect, color: Color32) -> ClippedPrimitive {

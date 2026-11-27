@@ -1,13 +1,12 @@
 [package]
 name = "liebert-dynamic-island"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Lightweight native Rust Dynamic Island notification overlay for Windows and Linux"
-
 [dependencies]
-eframe = { version = "0.37", default-features = false, features = ["glow", "clipboard", "x11", "wayland"] }
-egui_glow = "0.37"
+egui = { version = "0.37", default-features = false }
+epaint = { version = "0.37", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "1.2"
@@ -33,6 +32,8 @@ windows = { version = "0.62", features = [
     "UI_Notifications_Management",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
@@ -51,7 +52,12 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["glow", "clipboard", "x11"] }
+egui_glow = "0.37"
+
 [target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
 zbus = "6.5"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 smithay-client-toolkit = { version = "0.19", default-features = false, features = ["calloop", "xkbcommon"] }
@@ -71,7 +77,7 @@ panic = "abort"
 before-packaging-command = "cargo build --release"
 product-name = "Liebert Dynamic Island"
 identifier = "com.liebert.dynamic-island"
-version = "0.2.0"
+version = "0.2.1"
 out-dir = "./target/installer"
 # "nsis" menghasilkan installer .exe, "wix" menghasilkan installer .msi (keduanya mendukung uninstall Windows)
 formats = ["nsis", "wix"]

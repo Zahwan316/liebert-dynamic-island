@@ -1,8 +1,78 @@
-use std::f32::consts::PI;
+use std::f32::consts::{FRAC_PI_2, PI};
 
-use eframe::egui::{
-    self, Color32, CornerRadius, CursorIcon, Pos2, Rect, Response, Sense, Stroke, Vec2,
+use egui::{
+    self, Color32, CornerRadius, CursorIcon, Pos2, Rect, Response, Sense, Shape, Stroke, Vec2,
 };
+
+pub const SETTINGS_WINDOW_TITLE: &str = "Liebert Dynamic Island — Settings";
+
+#[allow(dead_code)] // Subset used by overlay; full enum used by Settings UI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    Appearance,
+    Lyrics,
+    Features,
+    System,
+    Battery,
+    Todo,
+    Calendar,
+    About,
+}
+
+#[allow(dead_code)] // Navigation metadata used by Settings sidebar & shortcuts.
+impl SettingsTab {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Appearance => "Display",
+            Self::Lyrics => "Lyrics",
+            Self::Features => "Features",
+            Self::System => "System",
+            Self::Battery => "Battery",
+            Self::Todo => "Tasks",
+            Self::Calendar => "Calendar",
+            Self::About => "About",
+        }
+    }
+
+    pub fn subtitle(self) -> &'static str {
+        match self {
+            Self::Appearance => "Island surface, glass material, mascot, clock & typography",
+            Self::Lyrics => "Media sync, karaoke highlight, romaji & translation",
+            Self::Features => "Auto-hide, fullscreen rules, notifications & Pomodoro",
+            Self::System => "OS startup & taskbar system monitor layout",
+            Self::Battery => "Device power telemetry & low-battery alerts",
+            Self::Todo => "Local quick checklist stored in todos.toml",
+            Self::Calendar => "Google Calendar secret .ics sync & upcoming schedule",
+            Self::About => "Creator, application version, license & runtime info",
+        }
+    }
+
+    pub fn icon(self) -> IconKind {
+        match self {
+            Self::Appearance => IconKind::Settings,
+            Self::Lyrics => IconKind::MusicNote,
+            Self::Features => IconKind::Timer,
+            Self::System => IconKind::Cpu,
+            Self::Battery => IconKind::Dot,
+            Self::Todo => IconKind::TodoCheck,
+            Self::Calendar => IconKind::Calendar,
+            Self::About => IconKind::Info,
+        }
+    }
+
+    pub fn all() -> [Self; 8] {
+        [
+            Self::Appearance,
+            Self::Lyrics,
+            Self::Features,
+            Self::System,
+            Self::Battery,
+            Self::Todo,
+            Self::Calendar,
+            Self::About,
+        ]
+    }
+}
 
 #[allow(dead_code)] // Shared vector icon variants across views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +84,8 @@ pub enum IconKind {
     Timer,
     Bell,
     Cpu,
+    Gpu,
+    Thermometer,
     Memory,
     Disk,
     ArrowUp,
@@ -64,8 +136,104 @@ pub fn icon_button(
 pub struct MascotMusicMotion {
     pub bars: [f32; 3],
     pub dot: f32,
+    /// Normalized neck-cock tilt angle in `-1.0..=1.0` (`±19°` around the neck pivot).
     pub nod_x: f32,
+    /// Forward head nod pitch in `0.0..=1.0` simulating 3D `rotateX` beat foreshortening.
+    pub pitch_x: f32,
     pub yepii: f32,
+}
+
+fn transform_mascot_pt(
+    pt: Pos2,
+    pivot: Pos2,
+    sin_a: f32,
+    cos_a: f32,
+    scale_y: f32,
+    nod_drop: f32,
+) -> Pos2 {
+    let dx = pt.x - pivot.x;
+    let dy = (pt.y - pivot.y) * scale_y + nod_drop;
+    Pos2::new(
+        pivot.x + dx * cos_a - dy * sin_a,
+        pivot.y + dx * sin_a + dy * cos_a,
+    )
+}
+
+fn rounded_rect_points(rect: Rect, cr: CornerRadius) -> Vec<Pos2> {
+    let hw = rect.width() * 0.5;
+    let hh = rect.height() * 0.5;
+    let max_r = hw.min(hh).max(0.0);
+    let r_nw = (cr.nw as f32).min(max_r);
+    let r_ne = (cr.ne as f32).min(max_r);
+    let r_se = (cr.se as f32).min(max_r);
+    let r_sw = (cr.sw as f32).min(max_r);
+
+    let mut pts = Vec::with_capacity(16);
+    let corners = [
+        (
+            Pos2::new(rect.left() + r_nw, rect.top() + r_nw),
+            r_nw,
+            PI,
+            PI + FRAC_PI_2,
+        ),
+        (
+            Pos2::new(rect.right() - r_ne, rect.top() + r_ne),
+            r_ne,
+            PI + FRAC_PI_2,
+            2.0 * PI,
+        ),
+        (
+            Pos2::new(rect.right() - r_se, rect.bottom() - r_se),
+            r_se,
+            0.0,
+            FRAC_PI_2,
+        ),
+        (
+            Pos2::new(rect.left() + r_sw, rect.bottom() - r_sw),
+            r_sw,
+            FRAC_PI_2,
+            PI,
+        ),
+    ];
+    for (center, r, a0, a1) in corners {
+        if r <= 0.25 {
+            pts.push(center);
+        } else {
+            for step in 0..=3 {
+                let t = step as f32 / 3.0;
+                let a = a0 + (a1 - a0) * t;
+                pts.push(Pos2::new(center.x + r * a.cos(), center.y + r * a.sin()));
+            }
+        }
+    }
+    pts
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_mascot_rect(
+    painter: &egui::Painter,
+    rect: Rect,
+    cr: CornerRadius,
+    color: Color32,
+    pivot: Pos2,
+    tilt_rad: f32,
+    sin_a: f32,
+    cos_a: f32,
+    scale_y: f32,
+    nod_drop: f32,
+) {
+    if rect.width() <= 0.1 || rect.height() <= 0.1 {
+        return;
+    }
+    if tilt_rad.abs() < 0.002 && (scale_y - 1.0).abs() < 0.002 && nod_drop.abs() < 0.05 {
+        painter.rect_filled(rect, cr, color);
+        return;
+    }
+    let pts: Vec<Pos2> = rounded_rect_points(rect, cr)
+        .into_iter()
+        .map(|p| transform_mascot_pt(p, pivot, sin_a, cos_a, scale_y, nod_drop))
+        .collect();
+    painter.add(Shape::convex_polygon(pts, color, Stroke::NONE));
 }
 
 pub fn paint_mascot(painter: &egui::Painter, rect: Rect, eye_offset_norm: Vec2, color: Color32) {
@@ -92,9 +260,9 @@ pub fn paint_mascot_fx(
     );
 }
 
-/// Renders the dancing music mascot: mouth morphs into 3 animated equalizer bars
-/// plus a beat dot, nodding left/right and scaling slightly on periodic "yepii" hops,
-/// while preserving cursor eye-tracking and natural blinking.
+/// Renders the dancing music mascot: mouth morphs into 3 animated equalizer bars + beat capsule,
+/// head cocks sharply left/right (~±19°) with beat pitch around a neck pivot like a neck-snap nod
+/// plus periodic "yepii" hops, while preserving cursor eye-tracking and natural blinking.
 pub fn paint_mascot_music(
     painter: &egui::Painter,
     rect: Rect,
@@ -126,10 +294,17 @@ fn paint_mascot_inner(
 ) {
     let yepii = music.map_or(0.0, |m| m.yepii.clamp(0.0, 1.0));
     let nod_x = music.map_or(0.0, |m| m.nod_x.clamp(-1.0, 1.0));
-    let scale_boost = 1.0 + 0.16 * yepii;
+    let pitch_x = music.map_or(0.0, |m| m.pitch_x.clamp(0.0, 1.0));
+    let scale_boost = 1.0 + 0.14 * yepii;
     let h = rect.height().min(rect.width()).max(8.0) * scale_boost;
-    let c = rect.center() + Vec2::new(nod_x * rect.width() * 0.08, -yepii * rect.height() * 0.08);
     let u = h / 24.0;
+    let c = rect.center() + Vec2::new(nod_x * rect.width() * 0.03, -yepii * rect.height() * 0.08);
+    // Anchor rotation at the neck/jaw hinge below the mouth so head tilts read like a crisp neck snap.
+    let pivot = Pos2::new(c.x, c.y + 10.5 * u);
+    let tilt_rad = nod_x * 19.0_f32.to_radians();
+    let (sin_a, cos_a) = tilt_rad.sin_cos();
+    let scale_y = 1.0 - 0.16 * pitch_x;
+    let nod_drop = pitch_x * 1.45 * u;
 
     let offset_len = eye_offset_norm.length();
     let norm = if offset_len > 1.0 {
@@ -137,12 +312,10 @@ fn paint_mascot_inner(
     } else {
         eye_offset_norm
     };
-    let eye_dx = norm.x * 2.8 * u + nod_x * 1.45 * u;
-    let eye_dy = norm.y * 2.0 * u - yepii * 0.65 * u;
-    let mouth_dx = norm.x * 2.8 * u * 0.14 + nod_x * 0.55 * u;
-    let mouth_dy = norm.y * 2.0 * u * 0.14 + yepii * 0.25 * u;
-    let left_tilt_y = -nod_x * 1.15 * u;
-    let right_tilt_y = nod_x * 1.15 * u;
+    let eye_dx = norm.x * 2.8 * u;
+    let eye_dy = norm.y * 2.0 * u - yepii * 0.55 * u;
+    let mouth_dx = norm.x * 2.8 * u * 0.14;
+    let mouth_dy = norm.y * 2.0 * u * 0.14 + yepii * 0.20 * u;
 
     let open = eye_open.clamp(0.14, 1.0);
     let base_eye_h = 10.2 * u;
@@ -155,8 +328,7 @@ fn paint_mascot_inner(
 
     let eyes_left = c.x - total_eyes_w * 0.5 + eye_dx;
     let base_eyes_cy = c.y - 9.8 * u + base_eye_h * 0.5 + eye_dy;
-    let left_eye_top = base_eyes_cy + left_tilt_y - eye_h * 0.5;
-    let right_eye_top = base_eyes_cy + right_tilt_y - eye_h * 0.5;
+    let eye_top = base_eyes_cy - eye_h * 0.5;
 
     let paint_glow_rect = |r: Rect, cr: CornerRadius| {
         let Some(gc) = glow_color else {
@@ -164,35 +336,49 @@ fn paint_mascot_inner(
         };
         let outer = (2.2 * u).max(1.5);
         let inner = (1.0 * u).max(0.8);
-        painter.rect_filled(
+        paint_mascot_rect(
+            painter,
             r.expand(outer),
             cr,
             Color32::from_rgba_unmultiplied(gc.r(), gc.g(), gc.b(), (gc.a() as f32 * 0.12) as u8),
+            pivot,
+            tilt_rad,
+            sin_a,
+            cos_a,
+            scale_y,
+            nod_drop,
         );
-        painter.rect_filled(
+        paint_mascot_rect(
+            painter,
             r.expand(inner),
             cr,
             Color32::from_rgba_unmultiplied(gc.r(), gc.g(), gc.b(), (gc.a() as f32 * 0.26) as u8),
+            pivot,
+            tilt_rad,
+            sin_a,
+            cos_a,
+            scale_y,
+            nod_drop,
         );
     };
 
     let stem_h = (eye_h - eye_t).max(0.0);
     let stem_rect = Rect::from_min_max(
-        Pos2::new(eyes_left, left_eye_top),
-        Pos2::new(eyes_left + eye_t, left_eye_top + stem_h),
+        Pos2::new(eyes_left, eye_top),
+        Pos2::new(eyes_left + eye_t, eye_top + stem_h),
     );
-    let foot_y0 = left_eye_top + stem_h;
+    let foot_y0 = eye_top + stem_h;
     let foot_rect = Rect::from_min_max(
         Pos2::new(eyes_left, foot_y0),
         Pos2::new(
             eyes_left + l_width,
-            (left_eye_top + eye_h).max(foot_y0 + eye_t * 0.85),
+            (eye_top + eye_h).max(foot_y0 + eye_t * 0.85),
         ),
     );
     let right_eye_x = eyes_left + l_width + eye_gap;
     let right_eye_rect = Rect::from_min_max(
-        Pos2::new(right_eye_x, right_eye_top),
-        Pos2::new(right_eye_x + eye_t, right_eye_top + eye_h),
+        Pos2::new(right_eye_x, eye_top),
+        Pos2::new(right_eye_x + eye_t, eye_top + eye_h),
     );
 
     let mouth_h = (4.8 * u).max(3.2);
@@ -230,17 +416,15 @@ fn paint_mascot_inner(
         let eq_gap = ((mouth_pill_w - eq_bar_w * 3.0) * 0.5).max(1.1 * u);
         let eq_cy = mouth_pill_rect.center().y;
         let eq_cap = (eq_bar_w * 0.5).round().clamp(1.0, 12.0) as u8;
-        let eq_bars: Vec<Rect> = (0..3)
-            .map(|i| {
-                let frac = m.bars[i].clamp(0.18, 1.0);
-                let bh = min_bar_h + (max_bar_h - min_bar_h) * frac;
-                let bx = mouth_left + i as f32 * (eq_bar_w + eq_gap);
-                Rect::from_center_size(
-                    Pos2::new(bx + eq_bar_w * 0.5, eq_cy),
-                    Vec2::new(eq_bar_w, bh),
-                )
-            })
-            .collect();
+        let eq_bars: [Rect; 3] = std::array::from_fn(|i| {
+            let frac = m.bars[i].clamp(0.18, 1.0);
+            let bh = min_bar_h + (max_bar_h - min_bar_h) * frac;
+            let bx = mouth_left + i as f32 * (eq_bar_w + eq_gap);
+            Rect::from_center_size(
+                Pos2::new(bx + eq_bar_w * 0.5, eq_cy),
+                Vec2::new(eq_bar_w, bh),
+            )
+        });
         let right_dot_h = min_bar_h + (max_bar_h * 0.86 - min_bar_h) * m.dot.clamp(0.25, 1.0);
         let right_bar = Rect::from_center_size(
             Pos2::new(
@@ -250,14 +434,36 @@ fn paint_mascot_inner(
             Vec2::new(mouth_dot_w.max(eq_bar_w * 0.88), right_dot_h),
         );
         let right_cap = (right_bar.width() * 0.5).round().clamp(1.0, 12.0) as u8;
-        for &r in &eq_bars {
+        for r in eq_bars {
             paint_glow_rect(r, CornerRadius::same(eq_cap));
         }
         paint_glow_rect(right_bar, CornerRadius::same(right_cap));
         for r in eq_bars {
-            painter.rect_filled(r, CornerRadius::same(eq_cap), color);
+            paint_mascot_rect(
+                painter,
+                r,
+                CornerRadius::same(eq_cap),
+                color,
+                pivot,
+                tilt_rad,
+                sin_a,
+                cos_a,
+                scale_y,
+                nod_drop,
+            );
         }
-        painter.rect_filled(right_bar, CornerRadius::same(right_cap), color);
+        paint_mascot_rect(
+            painter,
+            right_bar,
+            CornerRadius::same(right_cap),
+            color,
+            pivot,
+            tilt_rad,
+            sin_a,
+            cos_a,
+            scale_y,
+            nod_drop,
+        );
     } else {
         if let Some(gc) = glow_color {
             painter.rect_stroke(
@@ -280,7 +486,8 @@ fn paint_mascot_inner(
 
     // Left eye ("L"): crisp rounded stem + foot (collapses smoothly during blink).
     if stem_h > 0.5 {
-        painter.rect_filled(
+        paint_mascot_rect(
+            painter,
             stem_rect,
             CornerRadius {
                 nw: eye_cap,
@@ -289,8 +496,15 @@ fn paint_mascot_inner(
                 se: 0,
             },
             color,
+            pivot,
+            tilt_rad,
+            sin_a,
+            cos_a,
+            scale_y,
+            nod_drop,
         );
-        painter.rect_filled(
+        paint_mascot_rect(
+            painter,
             foot_rect,
             CornerRadius {
                 nw: 0,
@@ -299,13 +513,41 @@ fn paint_mascot_inner(
                 se: eye_cap,
             },
             color,
+            pivot,
+            tilt_rad,
+            sin_a,
+            cos_a,
+            scale_y,
+            nod_drop,
         );
     } else {
-        painter.rect_filled(foot_rect, CornerRadius::same(eye_cap), color);
+        paint_mascot_rect(
+            painter,
+            foot_rect,
+            CornerRadius::same(eye_cap),
+            color,
+            pivot,
+            tilt_rad,
+            sin_a,
+            cos_a,
+            scale_y,
+            nod_drop,
+        );
     }
 
     // Right eye ("I"): vertical rounded capsule.
-    painter.rect_filled(right_eye_rect, CornerRadius::same(eye_cap), color);
+    paint_mascot_rect(
+        painter,
+        right_eye_rect,
+        CornerRadius::same(eye_cap),
+        color,
+        pivot,
+        tilt_rad,
+        sin_a,
+        cos_a,
+        scale_y,
+        nod_drop,
+    );
 
     if music.is_none() {
         // Idle mouth: hollow horizontal pill + solid vertical pill on the right.
@@ -506,6 +748,50 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, kind: IconKind, color: Co
                     stroke,
                 );
             }
+        }
+        IconKind::Gpu => {
+            let board = Rect::from_center_size(c, Vec2::new(s * 0.78, s * 0.52));
+            painter.rect_stroke(
+                board,
+                CornerRadius::same((s * 0.10).round() as u8),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_stroke(
+                Pos2::new(c.x - s * 0.16, c.y),
+                s * 0.14,
+                Stroke::new((stroke_w * 0.9).max(1.0), color),
+            );
+            painter.circle_stroke(
+                Pos2::new(c.x + s * 0.16, c.y),
+                s * 0.14,
+                Stroke::new((stroke_w * 0.9).max(1.0), color),
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(board.left() - s * 0.08, board.top()),
+                    Pos2::new(board.left() - s * 0.08, board.bottom() + s * 0.12),
+                ],
+                stroke,
+            );
+        }
+        IconKind::Thermometer => {
+            let bulb = Pos2::new(c.x, c.y + s * 0.24);
+            painter.circle_filled(bulb, s * 0.15, color);
+            let stem = Rect::from_min_max(
+                Pos2::new(c.x - s * 0.09, c.y - s * 0.36),
+                Pos2::new(c.x + s * 0.09, bulb.y),
+            );
+            painter.rect_stroke(
+                stem,
+                CornerRadius::same((s * 0.09).round().max(1.0) as u8),
+                Stroke::new((stroke_w * 0.9).max(1.0), color),
+                egui::StrokeKind::Outside,
+            );
+            painter.line_segment(
+                [Pos2::new(c.x, c.y - s * 0.14), bulb],
+                Stroke::new((stroke_w * 0.9).max(1.0), color),
+            );
         }
         IconKind::Memory => {
             let stick = Rect::from_center_size(c, Vec2::new(s * 0.78, s * 0.44));

@@ -3,7 +3,6 @@ use std::future::pending;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,8 +14,7 @@ use zbus::{
 };
 
 use crate::platform::{
-    AlbumArt, FontFamilyTarget, FontFileSpec, HoverPollInput, MediaCommand, MediaTrack,
-    PlatformEvent, RepeatMode, decode_album_art,
+    AlbumArt, HoverPollInput, MediaCommand, MediaTrack, PlatformEvent, RepeatMode, decode_album_art,
 };
 use crate::state::{ListenerStatus, sanitized_notification_item};
 
@@ -361,17 +359,6 @@ pub fn sync_overlay_window(
     hypr_eval_or_fallback(&lua, &legacy);
 }
 
-pub fn bring_window_to_front(window_title: &str) -> bool {
-    if hypr_socket_path().is_none() {
-        return true;
-    }
-    let escaped = escape_lua_str(window_title);
-    let lua = format!("hl.dispatch(hl.dsp.focus({{window=\"title:^{escaped}$\"}}))");
-    let legacy = format!("/dispatch focuswindow title:^({window_title})$");
-    hypr_eval_or_fallback(&lua, &legacy);
-    true
-}
-
 fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool> {
     hypr_socket_path()?;
     let (cx, cy) = hypr_cursor_pos()?;
@@ -470,6 +457,7 @@ pub fn spawn_fullscreen_watcher(
     }
     std::thread::Builder::new()
         .name("linux-fullscreen-watcher".to_owned())
+        .stack_size(128 * 1024)
         .spawn(move || {
             let mut last_fs = detect_fullscreen_state();
             let _ = tx.send(PlatformEvent::Fullscreen(last_fs.0, last_fs.1));
@@ -506,133 +494,6 @@ pub fn detect_fullscreen_state() -> (bool, bool) {
 
 pub fn is_foreground_fullscreen() -> bool {
     detect_fullscreen_state().1
-}
-
-fn first_existing_path(candidates: &[&str]) -> Option<String> {
-    candidates
-        .iter()
-        .find(|p| Path::new(p).is_file())
-        .map(|p| (*p).to_owned())
-}
-
-fn fc_match_file(pattern: &str) -> Option<String> {
-    let out = Command::new("fc-match")
-        .args(["-f", "%{file}", pattern])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    (!path.is_empty() && Path::new(&path).is_file()).then_some(path)
-}
-
-pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
-    let mut specs = Vec::new();
-
-    if let Some(path) = first_existing_path(&[
-        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ])
-    .or_else(|| fc_match_file("sans-serif"))
-    {
-        specs.push(FontFileSpec {
-            name: "linux_sans".to_owned(),
-            path,
-            family: FontFamilyTarget::Proportional,
-            face_indices: &[0],
-        });
-    }
-
-    if let Some(path) = first_existing_path(&[
-        "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-    ])
-    .or_else(|| fc_match_file("monospace"))
-    {
-        specs.push(FontFileSpec {
-            name: "linux_mono".to_owned(),
-            path,
-            family: FontFamilyTarget::Monospace,
-            face_indices: &[0],
-        });
-    }
-
-    specs
-}
-
-pub fn bold_fallback_fonts() -> Vec<FontFileSpec> {
-    let mut specs = Vec::new();
-    if let Some(path) = first_existing_path(&[
-        "/usr/share/fonts/noto/NotoSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-        "/usr/share/fonts/google-noto/NotoSans-Bold.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/liberation/LiberationSans-Bold.ttf",
-    ])
-    .or_else(|| fc_match_file("sans-serif:bold"))
-    {
-        specs.push(FontFileSpec {
-            name: "linux_sans_bold".to_owned(),
-            path,
-            family: FontFamilyTarget::Bold,
-            face_indices: &[0],
-        });
-    }
-    specs
-}
-
-pub fn cjk_fallback_fonts_for(script: super::CjkScript) -> Vec<FontFileSpec> {
-    let (lang, bold_lang, ttc_face, suffix): (&str, &str, &'static [u32], &str) = match script {
-        super::CjkScript::JapaneseOrHan => (":lang=ja", ":lang=ja:bold", &[0], "jp"),
-        super::CjkScript::Korean => (":lang=ko", ":lang=ko:bold", &[1], "kr"),
-    };
-    let mut specs = Vec::new();
-    if let Some(path) = first_existing_path(&[
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
-        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Bold.ttc",
-    ])
-    .or_else(|| fc_match_file(bold_lang))
-    {
-        let faces = if path.ends_with(".ttc") {
-            ttc_face
-        } else {
-            &[0][..]
-        };
-        specs.push(FontFileSpec {
-            name: format!("linux_noto_cjk_{suffix}_bold"),
-            path,
-            family: FontFamilyTarget::Bold,
-            face_indices: faces,
-        });
-    }
-    if let Some(path) = first_existing_path(&[
-        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
-    ])
-    .or_else(|| fc_match_file(lang))
-    {
-        let faces = if path.ends_with(".ttc") {
-            ttc_face
-        } else {
-            &[0][..]
-        };
-        specs.push(FontFileSpec {
-            name: format!("linux_noto_cjk_{suffix}"),
-            path,
-            family: FontFamilyTarget::All,
-            face_indices: faces,
-        });
-    }
-    specs
 }
 
 struct NotificationServer {
@@ -1011,7 +872,7 @@ impl NotificationServer {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("liebert-dynamic-island", "Liebert", "0.2.0", "1.2")
+        ("liebert-dynamic-island", "Liebert", "0.2.1", "1.2")
     }
 }
 
@@ -1050,6 +911,7 @@ pub fn run_notification_spike() -> Result<String, String> {
 pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + Send + Sync>) {
     std::thread::Builder::new()
         .name("linux-dbus-notifications".to_owned())
+        .stack_size(128 * 1024)
         .spawn(move || {
             let server = NotificationServer {
                 next_id: AtomicU32::new(1),
@@ -1099,6 +961,7 @@ pub fn spawn_media_listener(
 ) {
     std::thread::Builder::new()
         .name("linux-mpris-media".to_owned())
+        .stack_size(192 * 1024)
         .spawn(move || {
             let mut sync_state: Option<MprisSyncState> = None;
             let mut cached_art: Option<ArtCacheState> = None;
@@ -1893,7 +1756,7 @@ fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
                 .get(&candidate)
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.2.0",
+                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.2.1",
                 )
                 .header(
                     "Accept",
@@ -1912,54 +1775,6 @@ fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
         }
     }
     None
-}
-
-pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
-    let mut dirs = vec![
-        std::path::PathBuf::from("/usr/share/fonts"),
-        std::path::PathBuf::from("/usr/local/share/fonts"),
-    ];
-    if let Ok(home) = std::env::var("HOME") {
-        dirs.push(std::path::PathBuf::from(home).join(".local/share/fonts"));
-    }
-    super::collect_fonts_from_dirs(&dirs)
-}
-
-/// Escape a path for the Desktop Entry `Exec` value, then quote it as one argument.
-fn escape_desktop_exec(path: &Path) -> String {
-    let escaped = path
-        .to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('$', "\\$")
-        .replace('`', "\\`");
-    format!("\"{escaped}\"")
-}
-
-/// Per-user XDG autostart entry. AppImage points `APPIMAGE` at the persistent file, so prefer it
-/// over `current_exe()` (which resolves to the temporary AppDir mount).
-pub fn set_autostart(enabled: bool) -> Result<(), String> {
-    let config_root = directories::BaseDirs::new()
-        .map(|dirs| dirs.config_dir().to_path_buf())
-        .ok_or_else(|| "Cannot resolve XDG config directory".to_owned())?;
-    let dir = config_root.join("autostart");
-    let file = dir.join("liebert-dynamic-island.desktop");
-
-    if !enabled {
-        match std::fs::remove_file(&file) {
-            Ok(()) => return Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-
-    let exe = std::env::var_os("APPIMAGE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_exe().ok())
-        .ok_or_else(|| "Cannot resolve executable path".to_owned())?;
-    let entry = super::desktop_autostart_entry(&escape_desktop_exec(&exe));
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(&file, entry).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -1991,34 +1806,6 @@ mod tests {
                 assert!(item.id.parse::<u32>().is_ok());
             }
             other => panic!("unexpected events: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn desktop_exec_escapes_shell_metacharacters() {
-        let exec = escape_desktop_exec(Path::new("/tmp/My $Apps/liebert\""));
-        assert_eq!(exec, "\"/tmp/My \\$Apps/liebert\\\"\"");
-    }
-
-    #[test]
-    fn base_and_cjk_font_discovery_finds_existing_files() {
-        let base = base_fallback_fonts();
-        for spec in &base {
-            assert!(
-                Path::new(&spec.path).is_file(),
-                "missing font {}",
-                spec.path
-            );
-            assert!(!spec.face_indices.is_empty());
-        }
-        let cjk = cjk_fallback_fonts_for(crate::platform::CjkScript::JapaneseOrHan);
-        for spec in &cjk {
-            assert!(
-                Path::new(&spec.path).is_file(),
-                "missing cjk font {}",
-                spec.path
-            );
-            assert!(!spec.face_indices.is_empty());
         }
     }
 

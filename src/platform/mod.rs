@@ -3,9 +3,12 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::calendar::CalendarEvent;
+use crate::calendar_types::CalendarEvent;
 use crate::lyrics::LyricsData;
 use crate::state::{ListenerStatus, NotificationItem};
+
+pub mod light;
+pub use light::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum RepeatMode {
@@ -233,26 +236,6 @@ pub fn query_taskbar_geometry() -> Option<TaskbarGeometry> {
     None
 }
 
-#[allow(dead_code)] // Variants used across Linux/Windows font specs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FontFamilyTarget {
-    #[cfg_attr(windows, allow(dead_code))]
-    Proportional,
-    #[cfg_attr(windows, allow(dead_code))]
-    Monospace,
-    Both,
-    Bold,
-    All,
-}
-
-#[derive(Debug, Clone)]
-pub struct FontFileSpec {
-    pub name: String,
-    pub path: String,
-    pub family: FontFamilyTarget,
-    pub face_indices: &'static [u32],
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct CursorScreenInfo {
     pub cursor_x: f32,
@@ -350,43 +333,6 @@ pub fn run_notification_spike() -> Result<String, String> {
 
     #[cfg(not(any(windows, target_os = "linux")))]
     Err("Notification spike is only supported on Windows and Linux".to_owned())
-}
-
-/// Enable or disable per-user start-with-OS. Never requires Administrator/root.
-pub fn set_autostart(enabled: bool) -> Result<(), String> {
-    #[cfg(windows)]
-    return windows::set_autostart(enabled);
-
-    #[cfg(target_os = "linux")]
-    return linux::set_autostart(enabled);
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        let _ = enabled;
-        Err("Autostart is only supported on Windows and Linux".to_owned())
-    }
-}
-
-/// Windows Run values must quote the executable path; keep this pure for unit tests.
-#[cfg_attr(not(windows), allow(dead_code))]
-fn windows_autostart_command(exe: &std::path::Path) -> String {
-    format!("\"{}\"", exe.to_string_lossy())
-}
-
-/// XDG autostart entry. `exec` is already escaped/quoted by the caller.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn desktop_autostart_entry(exec: &str) -> String {
-    format!(
-        "[Desktop Entry]\n\
-         Type=Application\n\
-         Name=Liebert Dynamic Island\n\
-         Comment=Lightweight native Rust Dynamic Island notification overlay\n\
-         Exec={exec}\n\
-         Icon=liebert-dynamic-island\n\
-         Terminal=false\n\
-         StartupNotify=false\n\
-         X-GNOME-Autostart-enabled=true\n"
-    )
 }
 
 #[cfg_attr(windows, allow(dead_code))]
@@ -600,80 +546,6 @@ pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
     }
 }
 
-pub fn bring_window_to_front(window_title: &str) -> bool {
-    #[cfg(windows)]
-    return windows::bring_window_to_front(window_title);
-
-    #[cfg(target_os = "linux")]
-    return linux::bring_window_to_front(window_title);
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        let _ = window_title;
-        true
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InstalledFont {
-    pub name: String,
-    pub path: String,
-}
-
-pub fn collect_fonts_from_dirs(dirs: &[std::path::PathBuf]) -> Vec<InstalledFont> {
-    let mut seen = std::collections::HashSet::new();
-    let mut fonts = Vec::new();
-    for dir in dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let sub = collect_fonts_from_dirs(&[path]);
-                for f in sub {
-                    if seen.insert(f.name.to_ascii_lowercase()) {
-                        fonts.push(f);
-                    }
-                }
-                continue;
-            }
-            let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-                continue;
-            };
-            if !matches!(ext.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc") {
-                continue;
-            }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            let display = stem.replace(['_', '-'], " ").trim().to_owned();
-            if display.is_empty() {
-                continue;
-            }
-            if seen.insert(display.to_ascii_lowercase()) {
-                fonts.push(InstalledFont {
-                    name: display,
-                    path: path.to_string_lossy().into_owned(),
-                });
-            }
-        }
-    }
-    fonts.sort_by_key(|a| a.name.to_ascii_lowercase());
-    fonts
-}
-
-pub fn list_installed_fonts() -> Vec<InstalledFont> {
-    #[cfg(windows)]
-    return windows::list_installed_fonts();
-
-    #[cfg(target_os = "linux")]
-    return linux::list_installed_fonts();
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    Vec::new()
-}
-
 #[allow(dead_code)] // Polled asynchronously by Windows fullscreen watcher; retained for Linux compatibility.
 pub fn is_foreground_fullscreen() -> bool {
     #[cfg(windows)]
@@ -684,48 +556,6 @@ pub fn is_foreground_fullscreen() -> bool {
 
     #[cfg(not(any(windows, target_os = "linux")))]
     false
-}
-
-pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
-    #[cfg(windows)]
-    return windows::base_fallback_fonts();
-
-    #[cfg(target_os = "linux")]
-    return linux::base_fallback_fonts();
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    Vec::new()
-}
-
-pub fn bold_fallback_fonts() -> Vec<FontFileSpec> {
-    #[cfg(windows)]
-    return windows::bold_fallback_fonts();
-
-    #[cfg(target_os = "linux")]
-    return linux::bold_fallback_fonts();
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    Vec::new()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CjkScript {
-    JapaneseOrHan,
-    Korean,
-}
-
-pub fn cjk_fallback_fonts_for(script: CjkScript) -> Vec<FontFileSpec> {
-    #[cfg(windows)]
-    return windows::cjk_fallback_fonts_for(script);
-
-    #[cfg(target_os = "linux")]
-    return linux::cjk_fallback_fonts_for(script);
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    {
-        let _ = script;
-        Vec::new()
-    }
 }
 
 #[cfg(test)]
@@ -746,25 +576,6 @@ mod tests {
 
         let gray = [180, 180, 180, 255].repeat(32);
         assert_eq!(extract_dominant_accent(&gray), None);
-    }
-
-    #[test]
-    fn windows_autostart_command_quotes_paths_with_spaces() {
-        let cmd = windows_autostart_command(std::path::Path::new(
-            r"C:\Program Files\Liebert\liebert-dynamic-island.exe",
-        ));
-        assert_eq!(
-            cmd,
-            r#""C:\Program Files\Liebert\liebert-dynamic-island.exe""#
-        );
-    }
-
-    #[test]
-    fn desktop_autostart_entry_has_required_keys() {
-        let entry = desktop_autostart_entry("\"/opt/My Apps/liebert\"");
-        assert!(entry.contains("[Desktop Entry]\n"));
-        assert!(entry.contains("Exec=\"/opt/My Apps/liebert\"\n"));
-        assert!(entry.contains("X-GNOME-Autostart-enabled=true\n"));
     }
 
     #[test]

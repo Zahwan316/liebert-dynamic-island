@@ -8,6 +8,30 @@ tags:
 
 # 04 - Changelog & Dev Log
 
+## 2026-11-28
+
+### Added (v0.2.1)
+
+- `src/ui/icons.rs`, `src/ui/mod.rs`: **Angguk rotate-X ala "neck crack" saat musik diputar** (Windows & Linux) — `MascotMusicMotion` kini membawa sinyal `nod_x`/`pitch_x` yang menggerakkan kepala maskot beberapa derajat pada sumbu X disertai sedikit drop vertikal Around neck pivot, sementara 3-bar EQ, eye-tracking, dan kedip tetap aktif. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-033).
+- `src/config.rs`, `src/ui/settings.rs`: **11 preset tema dengan dropdown `select` di Settings** — `ThemePreset` + `THEME_PRESETS` dipilih lewat `egui::ComboBox` (`theme_preset_select`) dengan pratinjau swatch dinamis dan fallback `Custom`.
+- `src/sysmon.rs`, `src/ui/settings.rs`, `src/ui/taskbar.rs`: **Telemetri CPU/GPU diperluas** — suhu CPU, suhu GPU, utilisasi GPU, serta VRAM used/total terbaca dari sysfs/`nvidia-smi` (Linux) dan PDH/DXGI/WMI (Windows), dengan cache interval terikat.
+- `src/ui/settings.rs`, `src/ui/icons.rs`: **Visualisasi Tasks lebih kaya** — progress bar completion, stripe status aksen/selesai, badge `ACTIVE`/`DONE`, tombol hapus berikon, dan ringkasan `pending · done` di header kartu.
+
+### Changed (v0.2.1)
+
+- `Cargo.toml`, `src/calendar_types.rs`, `src/clock_light.rs`, `src/platform/light.rs`, `src/ui/fonts.rs`, `src/ui/settings_eframe.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`: Pemisahan modul ringan untuk RAM — `egui`/`epaint` jadi dependensi global langsung, `eframe`/`egui_glow` hanya untuk fallback X11/Linux, tipe kalender/jam dan helper font dipindah ke modul khusus, font perangkat dipindai malas saat picker dibuka, dan worker lirik memakai stack `256 KiB`. `src/main.rs` memanggil `configure_low_ram_allocator()` saat startup.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`, `CHANGELOG.md`: Versi naik ke **`0.2.1`**; AppImage + `.tar.gz` Linux, `.zip` + NSIS Windows, dan bundel AUR dibangun ulang. `cargo fmt --all -- --check`, `cargo test --offline` **83 passed**, `cargo clippy --offline --all-targets -- -D warnings`, dan `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` bersih.
+
+### Fixed (v0.2.1)
+
+- `src/sysmon.rs`: **Deteksi penggunaan disk Linux** — kapasitas diagregasi dari mount nyata via parsing gaya `df` (pseudo filesystem dilewati) dan di-cache terlepas dari toggle aktivitas disk, sehingga used/total tetap dilaporkan meski `taskbar_show_disk` nonaktif.
+
+### Measured (v0.2.1)
+
+- Overlay `--demo` (Xvfb, Docker `rust:slim`, release): **`10,52 MB` RSS (`10516 kB`), `5,80 MB` PSS (`5798 kB`)**; anon/private `1,71 MB`, `RssFile` `8,81 MB`.
+- Settings Wayland (`--settings`, Weston headless): **`15,15 MB` RSS (`15152 kB`), `12,32 MB` PSS (`12324 kB`)**; anon/private `2,85 MB`, `RssFile` `10,76 MB`. Settings X11/eframe-Glow masih **`124,34 MB` RSS**.
+- **Status target `< 10 MB`:** Belum tercapai pada total RSS untuk Settings dan sedikit di atas ambang pada overlay X11 (`10,52 MB`), meski Pss overlay `5,80 MB` berada di bawah target. Penghalang tetap halaman kode/rodata binary monolitik (`RssFile` ~`8,8–10,8 MB`) dan jalur eframe/Glow X11; Windows RSS belum dapat diukur dari host Linux. Utang teknis tercatat di [[02 - Daftar Tugas & Backlog]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-033).
+
 ## 2026-11-27
 
 ### Added (v0.2.0)
