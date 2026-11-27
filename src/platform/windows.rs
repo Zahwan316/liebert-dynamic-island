@@ -55,7 +55,9 @@ use crate::platform::{
     AlbumArt, FontFamilyTarget, FontFileSpec, HoverPollInput, MediaCommand, MediaTrack,
     PlatformEvent, RepeatMode, decode_album_art,
 };
-use crate::state::{ListenerStatus, NotificationItem, sanitized_notification_item};
+use crate::state::{
+    ListenerStatus, NotificationItem, is_brave_app, is_web_origin_line, sanitized_notification_item,
+};
 
 fn init_com_mta() {
     // Ignore RPC_E_CHANGED_MODE if COM is already initialized on this thread.
@@ -126,6 +128,17 @@ fn extract_notification_item(notif: &UserNotification) -> Option<NotificationIte
                     }
                 }
             }
+        }
+    }
+
+    if is_brave_app(&app_name) && lines.len() > 1 {
+        let filtered: Vec<String> = lines
+            .iter()
+            .filter(|line| !is_web_origin_line(line))
+            .cloned()
+            .collect();
+        if !filtered.is_empty() {
+            lines = filtered;
         }
     }
 

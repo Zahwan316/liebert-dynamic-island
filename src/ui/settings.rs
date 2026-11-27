@@ -320,23 +320,30 @@ fn settings_panel_fill(config: &Config) -> Color32 {
         BackgroundMaterial::Solid => Color32::from_rgb(14, 15, 19),
         BackgroundMaterial::Acrylic => {
             if wayland_alpha {
-                Color32::from_rgba_unmultiplied(18, 20, 27, 212)
+                Color32::from_rgba_unmultiplied(15, 17, 23, 224)
             } else {
-                Color32::from_rgb(17, 19, 25)
+                Color32::from_rgb(16, 18, 24)
             }
         }
         BackgroundMaterial::FrostedGlass => {
             if wayland_alpha {
-                Color32::from_rgba_unmultiplied(24, 28, 38, 196)
+                Color32::from_rgba_unmultiplied(20, 24, 33, 214)
             } else {
-                Color32::from_rgb(22, 26, 35)
+                Color32::from_rgb(20, 24, 33)
             }
         }
         BackgroundMaterial::LiquidGlass => {
             if wayland_alpha {
-                Color32::from_rgba_unmultiplied(15, 18, 27, 178)
+                Color32::from_rgba_unmultiplied(13, 16, 24, 206)
             } else {
-                Color32::from_rgb(15, 18, 28)
+                Color32::from_rgb(14, 17, 26)
+            }
+        }
+        BackgroundMaterial::Glassmorphism => {
+            if wayland_alpha {
+                Color32::from_rgba_unmultiplied(16, 18, 28, 212)
+            } else {
+                Color32::from_rgb(16, 18, 28)
             }
         }
     }
@@ -355,7 +362,7 @@ fn paint_settings_material_backdrop(ui: &egui::Ui, config: &Config) {
                     rect.top() + rect.height() * 0.18,
                 ),
                 rect.width() * 0.34,
-                Color32::from_rgba_unmultiplied(ar, ag, ab, 14),
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 16),
             );
             // Subtle micro-stipple acrylic grain pattern.
             let step = 16.0;
@@ -367,7 +374,7 @@ fn paint_settings_material_backdrop(ui: &egui::Ui, config: &Config) {
                     painter.rect_filled(
                         Rect::from_min_size(Pos2::new(x, y), Vec2::splat(1.0)),
                         CornerRadius::ZERO,
-                        Color32::from_rgba_unmultiplied(255, 255, 255, 6),
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 7),
                     );
                     x += step;
                 }
@@ -391,19 +398,19 @@ fn paint_settings_material_backdrop(ui: &egui::Ui, config: &Config) {
                     rect.top() + rect.height() * 0.24,
                 ),
                 rect.width() * 0.30,
-                Color32::from_rgba_unmultiplied(ar, ag, ab, 16),
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 18),
             );
             painter.rect_stroke(
                 rect.shrink(1.0),
                 CornerRadius::same(12),
-                Stroke::new(1.5, Color32::from_rgba_unmultiplied(255, 255, 255, 28)),
+                Stroke::new(1.5, Color32::from_rgba_unmultiplied(255, 255, 255, 34)),
                 egui::StrokeKind::Inside,
             );
         }
         BackgroundMaterial::LiquidGlass => {
             let top_sheen = Rect::from_min_max(
                 rect.min,
-                Pos2::new(rect.right(), rect.top() + rect.height() * 0.36),
+                Pos2::new(rect.right(), rect.top() + rect.height() * 0.34),
             );
             painter.rect_filled(
                 top_sheen,
@@ -413,17 +420,46 @@ fn paint_settings_material_backdrop(ui: &egui::Ui, config: &Config) {
             painter.circle_filled(
                 Pos2::new(rect.left() + rect.width() * 0.25, rect.top() + 18.0),
                 rect.width() * 0.28,
-                Color32::from_rgba_unmultiplied(ar, ag, ab, 22),
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 24),
             );
             painter.circle_filled(
                 Pos2::new(rect.right() - rect.width() * 0.22, rect.bottom() - 24.0),
                 rect.width() * 0.24,
-                Color32::from_rgba_unmultiplied(150, 200, 255, 14),
+                Color32::from_rgba_unmultiplied(150, 200, 255, 16),
             );
             painter.rect_stroke(
                 rect.shrink(1.0),
                 CornerRadius::same(12),
-                Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 42)),
+                Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 52)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        BackgroundMaterial::Glassmorphism => {
+            painter.circle_filled(
+                Pos2::new(
+                    rect.left() + rect.width() * 0.22,
+                    rect.top() + rect.height() * 0.20,
+                ),
+                rect.width() * 0.34,
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 28),
+            );
+            painter.circle_filled(
+                Pos2::new(
+                    rect.right() - rect.width() * 0.20,
+                    rect.bottom() - rect.height() * 0.22,
+                ),
+                rect.width() * 0.32,
+                Color32::from_rgba_unmultiplied(110, 175, 255, 22),
+            );
+            painter.rect_filled(
+                rect,
+                CornerRadius::ZERO,
+                Color32::from_rgba_unmultiplied(10, 12, 18, 56),
+            );
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                CornerRadius::same(12),
+                Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
                 egui::StrokeKind::Inside,
             );
         }
@@ -441,10 +477,10 @@ fn bento_card(
 ) {
     let w = width.max(160.0);
     let frame = egui::Frame::new()
-        .fill(Color32::from_rgb(22, 24, 30))
+        .fill(Color32::from_rgba_unmultiplied(19, 21, 28, 236))
         .stroke(Stroke::new(
             1.0,
-            Color32::from_rgba_unmultiplied(255, 255, 255, 18),
+            Color32::from_rgba_unmultiplied(255, 255, 255, 26),
         ))
         .corner_radius(CornerRadius::same(13))
         .inner_margin(egui::Margin::same(11));
@@ -590,15 +626,15 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
         // Left Dashboard Sidebar Rail.
         let rail_alpha = match st.config.background_material {
             BackgroundMaterial::Solid => 245,
-            BackgroundMaterial::Acrylic => 210,
-            BackgroundMaterial::FrostedGlass => 195,
-            BackgroundMaterial::LiquidGlass => 176,
+            BackgroundMaterial::Acrylic => 224,
+            BackgroundMaterial::FrostedGlass => 216,
+            BackgroundMaterial::LiquidGlass => 206,
+            BackgroundMaterial::Glassmorphism => 214,
         };
-        let rail_stroke_alpha = if st.config.background_material == BackgroundMaterial::LiquidGlass
-        {
-            42
-        } else {
-            20
+        let rail_stroke_alpha = match st.config.background_material {
+            BackgroundMaterial::LiquidGlass => 50,
+            BackgroundMaterial::Glassmorphism => 66,
+            _ => 24,
         };
         let rail_frame = egui::Frame::new()
             .fill(Color32::from_rgba_unmultiplied(19, 20, 26, rail_alpha))
@@ -1256,6 +1292,7 @@ fn render_display_tab(
                             BackgroundMaterial::Acrylic,
                             BackgroundMaterial::FrostedGlass,
                             BackgroundMaterial::LiquidGlass,
+                            BackgroundMaterial::Glassmorphism,
                         ] {
                             let selected = config.background_material == mat;
                             if pill_toggle_chip(
@@ -1263,7 +1300,7 @@ fn render_display_tab(
                                 mat.label(),
                                 selected,
                                 accent,
-                                Vec2::new(66.0, 24.0),
+                                Vec2::new(72.0, 23.0),
                             )
                             .clicked()
                                 && !selected
@@ -2297,31 +2334,33 @@ fn render_about_tab(ui: &mut egui::Ui, config: &Config) {
             bento_card(
                 ui,
                 col_w,
-                118.0,
+                148.0,
                 accent,
-                "Author & Architecture",
-                None,
+                "Contributors & Engine",
+                Some(("2 Contributors", Color32::from_rgb(96, 186, 150))),
                 |ui| {
                     ui.label(
-                        RichText::new("Creator: Zahwan316")
+                        RichText::new("Creator: Zahwan316 (GitHub · 34 commits)")
                             .strong()
-                            .size(12.0)
+                            .size(11.8)
                             .color(Color32::WHITE),
                     );
                     ui.label(
-                        RichText::new("Email / Handle: Zahwan316 (GitHub)")
-                            .size(11.0)
-                            .color(Color32::from_gray(175)),
+                        RichText::new("Contributor: Gjenius20 / Zjen (GitHub · 8 commits)")
+                            .strong()
+                            .size(11.5)
+                            .color(accent_col),
                     );
+                    ui.add_space(2.0);
                     ui.label(
                         RichText::new("Engine: Rust 2024 · SoftCanvas CPU · egui 0.37")
-                            .size(11.0)
-                            .color(Color32::from_gray(175)),
+                            .size(10.8)
+                            .color(Color32::from_gray(185)),
                     );
                     ui.label(
                         RichText::new("Backends: Wayland wl_shm/layer-shell · Win32 DIB/WinRT")
-                            .size(11.0)
-                            .color(Color32::from_gray(175)),
+                            .size(10.8)
+                            .color(Color32::from_gray(185)),
                     );
                 },
             );
@@ -2330,7 +2369,7 @@ fn render_about_tab(ui: &mut egui::Ui, config: &Config) {
             bento_card(
                 ui,
                 col_w,
-                118.0,
+                148.0,
                 accent,
                 "Active Session Profile",
                 None,

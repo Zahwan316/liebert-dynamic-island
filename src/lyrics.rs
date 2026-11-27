@@ -386,8 +386,9 @@ pub fn spawn_lyrics_worker(
                 .timeout_global(Some(Duration::from_secs(10)))
                 .build();
             let agent: Agent = config.into();
-            type EnrichedCacheKey = (String, String, Option<String>, bool);
-            let mut raw_cache: BoundedCache<(String, String), LyricsData> =
+            type RawCacheKey = (String, String, Option<u64>);
+            type EnrichedCacheKey = (String, String, Option<u64>, Option<String>, bool);
+            let mut raw_cache: BoundedCache<RawCacheKey, LyricsData> =
                 BoundedCache::new(MAX_RAW_LYRICS_CACHE);
             let mut enriched_cache: BoundedCache<EnrichedCacheKey, LyricsData> =
                 BoundedCache::new(MAX_ENRICHED_LYRICS_CACHE);
@@ -397,11 +398,16 @@ pub fn spawn_lyrics_worker(
                     req = newer;
                 }
 
-                // MPRIS players often report duration 0 then the real value: exclude it from keys.
-                let track_key = (req.artist.clone(), req.title.clone());
+                // Include 5-second duration bucket so initial duration=0 misses cannot
+                // poison subsequent exact-duration fetches once the player reports length.
+                let dur_bucket = req.duration_secs.filter(|&d| d > 0).map(|d| d / 5);
+                let norm_artist = req.artist.trim().to_ascii_lowercase();
+                let norm_title = req.title.trim().to_ascii_lowercase();
+                let track_key = (norm_artist.clone(), norm_title.clone(), dur_bucket);
                 let full_key = (
-                    req.artist.clone(),
-                    req.title.clone(),
+                    norm_artist,
+                    norm_title,
+                    dur_bucket,
                     req.translate_lang.clone(),
                     req.need_romaji,
                 );
@@ -592,7 +598,7 @@ fn fetch_lyrics(
 }
 
 const LRCLIB_USER_AGENT: &str =
-    "LiebertDynamicIsland/0.1.13 (https://github.com/Zahwan316/liebert-dynamic-island)";
+    "LiebertDynamicIsland/0.2.0 (https://github.com/Zahwan316/liebert-dynamic-island)";
 
 fn query_lrclib_get(
     agent: &Agent,
@@ -604,25 +610,26 @@ fn query_lrclib_get(
         return None;
     }
     if let Some(dur) = duration_secs.filter(|&d| d > 0)
-        && let Some(data) = call_lrclib_get(agent, artist, title, Some(dur))
+        && let Some(data) = call_lrclib_get(agent, artist, title, Some(dur), duration_secs)
     {
         return Some(data);
     }
-    call_lrclib_get(agent, artist, title, None)
+    call_lrclib_get(agent, artist, title, None, duration_secs)
 }
 
 fn call_lrclib_get(
     agent: &Agent,
     artist: &str,
     title: &str,
-    duration_secs: Option<u64>,
+    duration_query: Option<u64>,
+    expected_duration: Option<u64>,
 ) -> Option<LyricsData> {
     let mut req = agent
         .get("https://lrclib.net/api/get")
         .header("User-Agent", LRCLIB_USER_AGENT)
         .query("artist_name", artist)
         .query("track_name", title);
-    if let Some(dur) = duration_secs {
+    if let Some(dur) = duration_query {
         req = req.query("duration", dur.to_string());
     }
     let body = req
@@ -634,7 +641,82 @@ fn call_lrclib_get(
         .read_to_string()
         .ok()?;
     let parsed: LrcLibResponse = serde_json::from_str(&body).ok()?;
+    if !duration_is_compatible(&parsed, expected_duration, 25.0) {
+        return None;
+    }
     response_to_lyrics(parsed)
+}
+
+fn duration_is_compatible(
+    resp: &LrcLibResponse,
+    expected: Option<u64>,
+    max_delta_secs: f64,
+) -> bool {
+    let Some(exp) = expected.filter(|&d| d > 10) else {
+        return true;
+    };
+    let Some(got) = resp.duration.filter(|&d| d > 10.0) else {
+        return true;
+    };
+    (got - exp as f64).abs() <= max_delta_secs
+}
+
+fn normalize_match_tokens(s: &str) -> Vec<String> {
+    strip_title_noise(s)
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|tok| !tok.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn titles_match(returned: &str, expected: &str) -> bool {
+    let r_norm = strip_title_noise(returned).to_lowercase();
+    let e_norm = strip_title_noise(expected).to_lowercase();
+    if r_norm.is_empty() || e_norm.is_empty() {
+        return false;
+    }
+    if r_norm == e_norm {
+        return true;
+    }
+    let r_toks = normalize_match_tokens(returned);
+    let e_toks = normalize_match_tokens(expected);
+    if r_toks.is_empty() || e_toks.is_empty() {
+        return false;
+    }
+    let matches = e_toks.iter().filter(|tok| r_toks.contains(*tok)).count();
+    if e_toks.len() == 1 {
+        return matches == 1 && (r_toks.len() <= 3 || r_norm.contains(&e_norm));
+    }
+    let min_needed = (e_toks.len() * 2).div_ceil(3);
+    matches >= min_needed
+}
+
+fn lrc_candidate_matches(
+    item: &LrcLibResponse,
+    expected_artist: &str,
+    expected_title: &str,
+    duration_secs: Option<u64>,
+) -> bool {
+    if !duration_is_compatible(item, duration_secs, 25.0) {
+        return false;
+    }
+    let Some(track_name) = item.track_name.as_deref() else {
+        return false;
+    };
+    if !titles_match(track_name, expected_title) {
+        return false;
+    }
+    let clean_exp_artist = clean_artist_name(expected_artist).to_lowercase();
+    if !clean_exp_artist.is_empty() {
+        let Some(ret_artist) = item.artist_name.as_deref() else {
+            return false;
+        };
+        if !artist_matches_loosely(ret_artist, &clean_exp_artist) {
+            return false;
+        }
+    }
+    true
 }
 
 fn rank_search_results(
@@ -644,8 +726,8 @@ fn rank_search_results(
     duration_secs: Option<u64>,
 ) {
     let target = duration_secs.filter(|&d| d > 0).map(|d| d as f64);
-    let artist_l = artist_hint.trim().to_ascii_lowercase();
-    let title_l = title_hint.trim().to_ascii_lowercase();
+    let artist_l = clean_artist_name(artist_hint).to_ascii_lowercase();
+    let title_l = strip_title_noise(title_hint).to_ascii_lowercase();
     list.sort_by(|a, b| {
         let a_synced = a
             .synced_lyrics
@@ -670,12 +752,12 @@ fn rank_search_results(
 
         let a_title_ok = !title_l.is_empty()
             && a.track_name
-                .as_ref()
-                .is_some_and(|s| s.to_ascii_lowercase().contains(&title_l));
+                .as_deref()
+                .is_some_and(|s| titles_match(s, &title_l));
         let b_title_ok = !title_l.is_empty()
             && b.track_name
-                .as_ref()
-                .is_some_and(|s| s.to_ascii_lowercase().contains(&title_l));
+                .as_deref()
+                .is_some_and(|s| titles_match(s, &title_l));
 
         let a_diff = target
             .and_then(|t| a.duration.map(|d| (d - t).abs()))
@@ -684,21 +766,30 @@ fn rank_search_results(
             .and_then(|t| b.duration.map(|d| (d - t).abs()))
             .unwrap_or(0.0);
 
-        b_dur_ok
-            .cmp(&a_dur_ok)
+        b_title_ok
+            .cmp(&a_title_ok)
             .then_with(|| b_artist_ok.cmp(&a_artist_ok))
+            .then_with(|| b_dur_ok.cmp(&a_dur_ok))
             .then_with(|| b_synced.cmp(&a_synced))
-            .then_with(|| b_title_ok.cmp(&a_title_ok))
             .then_with(|| a_diff.total_cmp(&b_diff))
     });
 }
 
 fn artist_matches_loosely(returned: &str, expected_lower: &str) -> bool {
-    let r = returned.trim().to_ascii_lowercase();
-    if r.is_empty() || expected_lower.is_empty() {
+    let r = clean_artist_name(returned).to_ascii_lowercase();
+    let e = expected_lower.trim();
+    if r.is_empty() || e.is_empty() {
         return false;
     }
-    r == expected_lower || r.contains(expected_lower) || expected_lower.contains(&r)
+    if r == e {
+        return true;
+    }
+    let r_prim = primary_artist(&r);
+    let e_prim = primary_artist(e);
+    if !r_prim.is_empty() && !e_prim.is_empty() && r_prim == e_prim {
+        return true;
+    }
+    (r.len() >= 4 && e.contains(&r)) || (e.len() >= 4 && r.contains(e))
 }
 
 fn fetch_lrclib_search_json(agent: &Agent, q: &str) -> Option<Vec<LrcLibResponse>> {
@@ -730,26 +821,27 @@ fn query_lrclib_search(
         && !list.is_empty()
     {
         rank_search_results(&mut list, artist, title, duration_secs);
-        if let Some(found) = list.into_iter().find_map(response_to_lyrics) {
+        if let Some(found) = list
+            .into_iter()
+            .filter(|item| lrc_candidate_matches(item, artist, title, duration_secs))
+            .find_map(response_to_lyrics)
+        {
             return Some(found);
         }
     }
 
     // Fallback: search by clean track title alone when artist formatting differs (e.g. aliases/feat tags),
-    // verifying that a matching artist exists if artist metadata was present.
+    // verifying that both track title, artist, and duration compatibility hold.
     let clean_t = title.trim();
     if !artist.trim().is_empty()
         && clean_t.chars().count() >= 4
         && let Some(mut list) = fetch_lrclib_search_json(agent, clean_t)
     {
-        let exp = artist.trim().to_ascii_lowercase();
-        list.retain(|item| {
-            item.artist_name
-                .as_ref()
-                .is_some_and(|a| artist_matches_loosely(a, &exp))
-        });
         rank_search_results(&mut list, artist, clean_t, duration_secs);
-        return list.into_iter().find_map(response_to_lyrics);
+        return list
+            .into_iter()
+            .filter(|item| lrc_candidate_matches(item, artist, clean_t, duration_secs))
+            .find_map(response_to_lyrics);
     }
     None
 }
@@ -1103,5 +1195,59 @@ mod tests {
         ];
         rank_search_results(&mut results, "Tester", "Song", None);
         assert!(results[0].synced_lyrics.is_some());
+    }
+
+    #[test]
+    fn search_matcher_rejects_mismatched_title_artist_or_duration() {
+        let wrong_artist = LrcLibResponse {
+            artist_name: Some("Different Singer".to_owned()),
+            track_name: Some("Idol".to_owned()),
+            duration: Some(213.0),
+            synced_lyrics: Some("[00:01.00]Wrong".to_owned()),
+            plain_lyrics: None,
+        };
+        assert!(!lrc_candidate_matches(
+            &wrong_artist,
+            "YOASOBI",
+            "Idol",
+            Some(213)
+        ));
+
+        let wrong_dur = LrcLibResponse {
+            artist_name: Some("YOASOBI".to_owned()),
+            track_name: Some("Idol".to_owned()),
+            duration: Some(90.0),
+            synced_lyrics: Some("[00:01.00]TV Size".to_owned()),
+            plain_lyrics: None,
+        };
+        assert!(!lrc_candidate_matches(
+            &wrong_dur,
+            "YOASOBI",
+            "Idol",
+            Some(213)
+        ));
+
+        let wrong_title = LrcLibResponse {
+            artist_name: Some("YOASOBI".to_owned()),
+            track_name: Some("Racing into the Night".to_owned()),
+            duration: Some(213.0),
+            synced_lyrics: Some("[00:01.00]Wrong track".to_owned()),
+            plain_lyrics: None,
+        };
+        assert!(!lrc_candidate_matches(
+            &wrong_title,
+            "YOASOBI",
+            "Idol",
+            Some(213)
+        ));
+
+        let exact = LrcLibResponse {
+            artist_name: Some("YOASOBI".to_owned()),
+            track_name: Some("Idol (Official Audio)".to_owned()),
+            duration: Some(214.0),
+            synced_lyrics: Some("[00:01.00]Exact track".to_owned()),
+            plain_lyrics: None,
+        };
+        assert!(lrc_candidate_matches(&exact, "YOASOBI", "Idol", Some(213)));
     }
 }

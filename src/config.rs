@@ -75,6 +75,7 @@ pub enum BackgroundMaterial {
     Acrylic,
     FrostedGlass,
     LiquidGlass,
+    Glassmorphism,
 }
 
 impl BackgroundMaterial {
@@ -84,6 +85,7 @@ impl BackgroundMaterial {
             Self::Acrylic => "Acrylic",
             Self::FrostedGlass => "Frosted Glass",
             Self::LiquidGlass => "Liquid Glass",
+            Self::Glassmorphism => "Glassmorphism",
         }
     }
 }
@@ -378,7 +380,7 @@ mod tests {
             lyric_offset_ms: -450,
             idle_display: IdleDisplayMode::Mascot,
             show_idle_mascot: false,
-            background_material: BackgroundMaterial::LiquidGlass,
+            background_material: BackgroundMaterial::Glassmorphism,
             clock_timezone: "Asia/Jakarta".to_owned(),
             clock_24h: false,
             clock_show_seconds: true,

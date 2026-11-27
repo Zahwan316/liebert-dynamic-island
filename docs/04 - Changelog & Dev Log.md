@@ -10,6 +10,29 @@ tags:
 
 ## 2026-11-27
 
+### Added (v0.2.0)
+
+- `src/ui/icons.rs`, `src/ui/mod.rs`: **Animasi maskot memutar musik (`paint_mascot_music`, `MascotMusicMotion`)** (Windows & Linux) — saat musik aktif diputar, mulut maskot berubah menjadi **3 bar equalizer animasi** (+ kapsul vertikal kanan), mengangguk ke kiri-kanan (`nod_x`), dan melakukan lonjakan pop pembesaran **"yepii"** berkala (`~2,2 s`), sambil tetap menjaga **pelacakan kursor mata** (`eye_offset`) dan **kedip alami** (`eye_open`) di pill musik idle, mode `Mascot`/`Clock`, serta tile Jam tab Home. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-032).
+- `src/state.rs`, `src/ui/mod.rs`: **Countdown bar notifikasi mengecil ke tengah** (`IslandState::collapse_remaining_frac` + `render_compact`) — saat popup notifikasi tampil (`Compact`), bar berwarna brand aplikasi di tepi bawah menyusut simetris ke tengah seiring sisa waktu auto-dismiss (dan tertahan penuh saat hover/Expanded).
+- `src/ui/mod.rs`: **Slide-to-dismiss pada tab `Notifications`** (`render_notifications_tab` + `notif_swipe`) — geser horizontal kartu notifikasi ke kiri atau kanan melewati ambang batas (`max(48px, 28%)`) menampilkan latar hapus merah + ikon `Close` lalu menghapus notifikasi dari riwayat maupun antrean aktif.
+- `src/config.rs`, `src/ui/{mod,settings}.rs`: **Material `Glassmorphism` & peningkatan keterbacaan seluruh mode kaca** (Windows & Linux) — menambah varian kelima `BackgroundMaterial::Glassmorphism` (`theme` bloom dual-orb + specular highlight + border kaca crisp) di Settings (`Theme, Colors & Glass`) maupun pill/expanded overlay; menaikkan floor alpha scrim gelap (`178–224`) serta kecerahan `text_color32`/`muted_color32` pada semua mode kaca (`Acrylic`, `FrostedGlass`, `LiquidGlass`, `Glassmorphism`) agar teks tetap mudah terbaca di wallpaper terang.
+- `src/ui/settings.rs`: **Daftar kontributor GitHub pada tab `About`** — menampilkan `Zahwan316` (Creator · 34 commits) dan `Gjenius20` / `Zjen` (Contributor · 8 commits) sesuai riwayat repositori GitHub.
+
+### Changed (v0.2.0)
+
+- `AGENTS.md`, `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi dirilis ke **`0.2.0`** dengan aturan carry-over semver di `AGENTS.md` §6 (`Z >= 10 → Z = 0, Y += 1`; `Y >= 10 → Y = 0, X += 1`). AppImage & `.tar.gz` Linux serta installer NSIS `3.474.401` byte & `.zip` Windows dibangun ulang; `cargo fmt --all -- --check`, `cargo test --offline` **80 passed**, `cargo clippy --offline --all-targets -- -D warnings`, dan `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` (Docker `rust:slim` + `gcc-mingw-w64-x86-64` + `nsis`) bersih.
+
+### Fixed (v0.2.0)
+
+- `src/lyrics.rs`, `src/ui/mod.rs`: **Perbaikan bug lirik tidak sesuai lagu yang diputar** — menyertakan bucket durasi 5 detik ke kunci `raw_cache`/`enriched_cache` (agar pencarian awal saat `duration = 0` tidak mengunci hasil salah ketika durasi asli tiba), memperketat validasi hasil `/api/search` dan fallback `/api/get` (`lrc_candidate_matches`, `titles_match`, toleransi durasi ±25s, kecocokan artis), serta mereset & memvalidasi kecocokan track `(artist, title)` secara case-insensitive saat `PlatformEvent::Media`, `LyricsLoaded`, dan `apply_snapshot`.
+- `src/state.rs`, `src/platform/windows.rs`: **Penyembunyian nama website/domain pada notifikasi browser Brave** (`is_brave_app`, `is_web_origin_line`, `strip_brave_origin_from_text`) — membuang origin web seperti `web.whatsapp.com`, `via chat.openai.com`, `youtube.com`, dan akhiran `(<domain>)`/`— <domain>` di jalur Linux D-Bus maupun Windows WinRT sebelum teks diringkas.
+
+### Measured (v0.2.0)
+
+- **Settings Wayland CPU (`--settings`, host Hyprland Linux):** **`18,21 MB` RSS (`18652 kB`), `13,47 MB` PSS (`13792 kB`)**; anon/heap private **`3,33 MB`** (`3412 kB`), binary `RssFile` `8,33 MB` PSS (`8526 kB`), shmem `1,81 MB` PSS, driver GPU `0 kB`.
+- **Demo + Overlay Wayland (`--demo`, host Linux saat media CJK aktif):** **`20,01 MB` RSS (`20488 kB`), `16,25 MB` PSS (`16641 kB`)**; anon/heap private **`5,08 MB`** (`5200 kB`, turun dari `5,12 MB`), `NotoSansCJK-Bold`/`Regular` via mmap masing-masing hanya `537 kB` + `375 kB` PSS.
+- **Status target `< 10 MB`:** **Belum tercapai pada total RSS/PSS** (meski anon/private `3,33 MB` & `5,08 MB`) karena halaman kode binary monolitik `RssFile` (`9,2–10,7 MB`) masih memuat `eframe`/`egui_glow`/`winit`/`rustls`/`zbus` dalam satu executable. Host Windows RSS belum dapat diukur pada host Linux. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-032) dan [[02 - Daftar Tugas & Backlog]].
+
 ### Added (v0.1.13)
 
 - `src/ui/icons.rs`, `src/ui/mod.rs`: **Animasi kedip & glow maskot idle** (Windows & Linux) — `paint_mascot_fx()` menambah dua pass halo cahaya di belakang kapsul maskot putih serta kelenturan kedip alami ~170 ms setiap ~3,6–5,2 detik yang dikendalikan `step_logic` secara event-driven pada pill idle (`IdleDisplayMode::Mascot`/`Clock`/`Minimal`) maupun tile Jam di Home. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-031).

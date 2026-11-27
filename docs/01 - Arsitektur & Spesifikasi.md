@@ -40,10 +40,10 @@ liebert-dynamic-island/
     ├── main.rs                  # Entry point, CLI flags (--ui, --settings, --ipc-addr/--ipc-sock, --spike-notifications)
     ├── daemon.rs                # Headless background daemon & on-demand UI spawner (fallback X11 / --ui)
     ├── ipc.rs                   # Protokol IPC JSON-lines via TCP loopback (DaemonToUi / UiToDaemon)
-    ├── config.rs                # Load/save config.toml (size, colors, presets, BackgroundMaterial, clock, idle mode, .ics URL, show_battery, start_with_os)
-    ├── state.rs                 # Island state machine (Idle, Compact, Expanded), queue, sanitasi HTML/entitas notifikasi, & auto-hide delay
+    ├── config.rs                # Load/save config.toml (size, colors, presets, BackgroundMaterial incl. Glassmorphism, clock, idle mode, .ics URL, show_battery, start_with_os)
+    ├── state.rs                 # Island state machine (Idle, Compact, Expanded), queue, countdown shrink frac, filter web origin Brave + HTML/entitas, & auto-hide delay
     ├── clock.rs                 # Jam digital & formatter zona waktu IANA (chrono-tz)
-    ├── lyrics.rs                # LRC / Enhanced LRC parser, karaoke progress, romaji & translate worker
+    ├── lyrics.rs                # LRC / Enhanced LRC parser, karaoke progress, duration-aware bounded cache & validated LRCLIB matcher, romaji & translate worker
     ├── todo.rs                  # TodoStore & persistensi todos.toml
     ├── pomodoro.rs              # PomodoroTimer (Focus/Short/Long Break & siklus 4 sesi)
     ├── calendar.rs              # RFC 5545 .ics parser & Google Calendar sync worker
@@ -51,10 +51,10 @@ liebert-dynamic-island/
     ├── battery.rs               # Baterai Win32 GetSystemPowerStatus / sysfs power_supply
     ├── tray.rs                  # System tray menu & lifecycle control
     ├── ui/
-    │   ├── mod.rs               # Overlay pill (Idle/Compact/Expanded Gallery Home 4×2, tab Notifications/Calendar/System, material glass), spring physics, AA notch mesh, & UI loop
+    │   ├── mod.rs               # Overlay pill (Idle music mascot, Compact bar mengecil ke tengah, Expanded Gallery Home 4×2, Swipe-to-dismiss Notifications, Calendar grid, Glassmorphism), spring physics, & UI loop
     │   ├── soft_render.rs       # Pure-Rust CPU egui ClippedPrimitive rasterizer (premultiplied BGRA/RGBA)
-    │   ├── icons.rs             # Crisp Painter-drawn vector icons (Cpu/Memory/Disk/Bell/Arrows/Info) & maskot kedip+glow pelacak kursor (`paint_mascot_fx`)
-    │   └── settings.rs          # Dashboard Bento Grid Settings tabs (incl. Display Glass Material, Mascot, About) + --settings runner
+    │   ├── icons.rs             # Crisp Painter-drawn vector icons, maskot idle kedip+glow (`paint_mascot_fx`), & maskot musik 3-bar EQ/nod/yepii (`paint_mascot_music`)
+    │   └── settings.rs          # Dashboard Bento Grid Settings tabs (incl. 5 Glass Materials, Mascot, About + Contributors) + --settings runner
     └── platform/
         ├── mod.rs               # Facade lintas OS + dekoder ikon notifikasi 28×28 (`decode_notification_icon_bytes`, `decode_raw_notification_image`)
         ├── windows.rs           # Win32 hover/cursor/no-activate/DWM, fullscreen watcher, WinRT Notifications (+ AppDisplayInfo logo) & SMTC, HKCU Run autostart
@@ -103,6 +103,6 @@ pub struct NotificationItem {
 ## Target Non-Fungsional
 - **Startup Time:** `< 500 ms` hingga pill tampil.
 - **Notification Latency:** `< 150 ms` dari event OS hingga frame animasi masuk.
-- **Resource Footprint:** Permintaan terbaru pengguna adalah **`< 10 MB` RAM** untuk overlay dan Settings (`< 0.5%` CPU idle). Pada v0.1.13 (`SoftCanvas` Settings + `memmap2` + 1× Latin Bold ringkas + penghapusan `default_fonts` + `max_texture_side=1024` + `lto="fat"`/`opt-level="z"` + `wl_shm`), pengukuran Wayland `--settings` menjadi **`19,58 MB` RSS / `13,83 MB` PSS** (`3,31 MB` anon/private, `0 kB` driver GL), dan `--demo` menjadi **`18,95 MB` RSS / `15,07 MB` PSS** (`5,12 MB` anon/private). Target `< 10 MB` total proses **belum tercapai** terutama karena halaman executable/rodata binary monolitik (`8,0–9,8 MB` PSS) masih menautkan `eframe`/`egui_glow`/`winit`/`rustls`/`zbus` dalam satu file (utang teknis ADR-031).
+- **Resource Footprint:** Permintaan terbaru pengguna adalah **`< 10 MB` RAM** untuk overlay dan Settings (`< 0.5%` CPU idle). Pada v0.2.0 (`SoftCanvas` Settings + `memmap2` + 1× Latin Bold ringkas + penghapusan `default_fonts` + `max_texture_side=1024` + `lto="fat"`/`opt-level="z"` + `wl_shm`), pengukuran Wayland `--settings` menjadi **`18,21 MB` RSS / `13,47 MB` PSS** (`3,33 MB` anon/private, `0 kB` driver GL), dan `--demo` menjadi **`20,01 MB` RSS / `16,25 MB` PSS** (`5,08 MB` anon/private saat media CJK aktif). Target `< 10 MB` total proses **belum tercapai** terutama karena halaman executable/rodata binary monolitik (`8,3–10,7 MB` PSS) masih menautkan `eframe`/`egui_glow`/`winit`/`rustls`/`zbus` dalam satu file (utang teknis ADR-032).
 - **Rendering & DPI:** `>= 60 FPS` saat animasi transisi; Per-Monitor DPI Aware v2 (Windows) & fractional scaling (Linux).
 - **Privasi & Jaringan:** Data notifikasi OS diproses 100% lokal tanpa telemetri maupun log persisten. Permintaan jaringan keluar bersifat opsional dan terbatas pada metadata lagu (`artist`/`title`) ke `lrclib.net` (saat `show_lyrics` aktif) serta fetch URL `.ics` Google Calendar yang dikonfigurasi pengguna.

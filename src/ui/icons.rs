@@ -60,6 +60,14 @@ pub fn icon_button(
     resp
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MascotMusicMotion {
+    pub bars: [f32; 3],
+    pub dot: f32,
+    pub nod_x: f32,
+    pub yepii: f32,
+}
+
 pub fn paint_mascot(painter: &egui::Painter, rect: Rect, eye_offset_norm: Vec2, color: Color32) {
     paint_mascot_fx(painter, rect, eye_offset_norm, 1.0, Some(color), color);
 }
@@ -73,8 +81,54 @@ pub fn paint_mascot_fx(
     glow_color: Option<Color32>,
     color: Color32,
 ) {
-    let h = rect.height().min(rect.width()).max(8.0);
-    let c = rect.center();
+    paint_mascot_inner(
+        painter,
+        rect,
+        eye_offset_norm,
+        eye_open,
+        glow_color,
+        color,
+        None,
+    );
+}
+
+/// Renders the dancing music mascot: mouth morphs into 3 animated equalizer bars
+/// plus a beat dot, nodding left/right and scaling slightly on periodic "yepii" hops,
+/// while preserving cursor eye-tracking and natural blinking.
+pub fn paint_mascot_music(
+    painter: &egui::Painter,
+    rect: Rect,
+    eye_offset_norm: Vec2,
+    eye_open: f32,
+    glow_color: Option<Color32>,
+    color: Color32,
+    motion: MascotMusicMotion,
+) {
+    paint_mascot_inner(
+        painter,
+        rect,
+        eye_offset_norm,
+        eye_open,
+        glow_color,
+        color,
+        Some(motion),
+    );
+}
+
+fn paint_mascot_inner(
+    painter: &egui::Painter,
+    rect: Rect,
+    eye_offset_norm: Vec2,
+    eye_open: f32,
+    glow_color: Option<Color32>,
+    color: Color32,
+    music: Option<MascotMusicMotion>,
+) {
+    let yepii = music.map_or(0.0, |m| m.yepii.clamp(0.0, 1.0));
+    let nod_x = music.map_or(0.0, |m| m.nod_x.clamp(-1.0, 1.0));
+    let scale_boost = 1.0 + 0.16 * yepii;
+    let h = rect.height().min(rect.width()).max(8.0) * scale_boost;
+    let c = rect.center() + Vec2::new(nod_x * rect.width() * 0.08, -yepii * rect.height() * 0.08);
     let u = h / 24.0;
 
     let offset_len = eye_offset_norm.length();
@@ -83,10 +137,12 @@ pub fn paint_mascot_fx(
     } else {
         eye_offset_norm
     };
-    let eye_dx = norm.x * 2.8 * u;
-    let eye_dy = norm.y * 2.0 * u;
-    let mouth_dx = eye_dx * 0.14;
-    let mouth_dy = eye_dy * 0.14;
+    let eye_dx = norm.x * 2.8 * u + nod_x * 1.45 * u;
+    let eye_dy = norm.y * 2.0 * u - yepii * 0.65 * u;
+    let mouth_dx = norm.x * 2.8 * u * 0.14 + nod_x * 0.55 * u;
+    let mouth_dy = norm.y * 2.0 * u * 0.14 + yepii * 0.25 * u;
+    let left_tilt_y = -nod_x * 1.15 * u;
+    let right_tilt_y = nod_x * 1.15 * u;
 
     let open = eye_open.clamp(0.14, 1.0);
     let base_eye_h = 10.2 * u;
@@ -99,7 +155,8 @@ pub fn paint_mascot_fx(
 
     let eyes_left = c.x - total_eyes_w * 0.5 + eye_dx;
     let base_eyes_cy = c.y - 9.8 * u + base_eye_h * 0.5 + eye_dy;
-    let eyes_top = base_eyes_cy - eye_h * 0.5;
+    let left_eye_top = base_eyes_cy + left_tilt_y - eye_h * 0.5;
+    let right_eye_top = base_eyes_cy + right_tilt_y - eye_h * 0.5;
 
     let paint_glow_rect = |r: Rect, cr: CornerRadius| {
         let Some(gc) = glow_color else {
@@ -110,32 +167,32 @@ pub fn paint_mascot_fx(
         painter.rect_filled(
             r.expand(outer),
             cr,
-            Color32::from_rgba_unmultiplied(gc.r(), gc.g(), gc.b(), (gc.a() as f32 * 0.10) as u8),
+            Color32::from_rgba_unmultiplied(gc.r(), gc.g(), gc.b(), (gc.a() as f32 * 0.12) as u8),
         );
         painter.rect_filled(
             r.expand(inner),
             cr,
-            Color32::from_rgba_unmultiplied(gc.r(), gc.g(), gc.b(), (gc.a() as f32 * 0.24) as u8),
+            Color32::from_rgba_unmultiplied(gc.r(), gc.g(), gc.b(), (gc.a() as f32 * 0.26) as u8),
         );
     };
 
     let stem_h = (eye_h - eye_t).max(0.0);
     let stem_rect = Rect::from_min_max(
-        Pos2::new(eyes_left, eyes_top),
-        Pos2::new(eyes_left + eye_t, eyes_top + stem_h),
+        Pos2::new(eyes_left, left_eye_top),
+        Pos2::new(eyes_left + eye_t, left_eye_top + stem_h),
     );
-    let foot_y0 = eyes_top + stem_h;
+    let foot_y0 = left_eye_top + stem_h;
     let foot_rect = Rect::from_min_max(
         Pos2::new(eyes_left, foot_y0),
         Pos2::new(
             eyes_left + l_width,
-            (eyes_top + eye_h).max(foot_y0 + eye_t * 0.85),
+            (left_eye_top + eye_h).max(foot_y0 + eye_t * 0.85),
         ),
     );
     let right_eye_x = eyes_left + l_width + eye_gap;
     let right_eye_rect = Rect::from_min_max(
-        Pos2::new(right_eye_x, eyes_top),
-        Pos2::new(right_eye_x + eye_t, eyes_top + eye_h),
+        Pos2::new(right_eye_x, right_eye_top),
+        Pos2::new(right_eye_x + eye_t, right_eye_top + eye_h),
     );
 
     let mouth_h = (4.8 * u).max(3.2);
@@ -163,23 +220,63 @@ pub fn paint_mascot_fx(
     }
     paint_glow_rect(foot_rect, CornerRadius::same(eye_cap));
     paint_glow_rect(right_eye_rect, CornerRadius::same(eye_cap));
-    if let Some(gc) = glow_color {
-        painter.rect_stroke(
-            mouth_pill_rect.expand(1.2 * u),
-            CornerRadius::same(mouth_cap.saturating_add(1)),
-            Stroke::new(
-                mouth_stroke + 1.8 * u,
-                Color32::from_rgba_unmultiplied(
-                    gc.r(),
-                    gc.g(),
-                    gc.b(),
-                    (gc.a() as f32 * 0.16) as u8,
-                ),
+
+    if let Some(m) = music {
+        // Music mode: 3 animated vertical equalizer pills replace the oval mouth,
+        // accompanied by the signature vertical capsule on the right.
+        let max_bar_h = (7.2 * u).max(4.4);
+        let min_bar_h = (2.6 * u).max(2.0);
+        let eq_bar_w = ((mouth_pill_w - 2.4 * u) / 3.0).clamp(1.6, 3.2 * u);
+        let eq_gap = ((mouth_pill_w - eq_bar_w * 3.0) * 0.5).max(1.1 * u);
+        let eq_cy = mouth_pill_rect.center().y;
+        let eq_cap = (eq_bar_w * 0.5).round().clamp(1.0, 12.0) as u8;
+        let eq_bars: Vec<Rect> = (0..3)
+            .map(|i| {
+                let frac = m.bars[i].clamp(0.18, 1.0);
+                let bh = min_bar_h + (max_bar_h - min_bar_h) * frac;
+                let bx = mouth_left + i as f32 * (eq_bar_w + eq_gap);
+                Rect::from_center_size(
+                    Pos2::new(bx + eq_bar_w * 0.5, eq_cy),
+                    Vec2::new(eq_bar_w, bh),
+                )
+            })
+            .collect();
+        let right_dot_h = min_bar_h + (max_bar_h * 0.86 - min_bar_h) * m.dot.clamp(0.25, 1.0);
+        let right_bar = Rect::from_center_size(
+            Pos2::new(
+                mouth_left + mouth_pill_w + mouth_gap + mouth_dot_w * 0.5,
+                eq_cy,
             ),
-            egui::StrokeKind::Middle,
+            Vec2::new(mouth_dot_w.max(eq_bar_w * 0.88), right_dot_h),
         );
+        let right_cap = (right_bar.width() * 0.5).round().clamp(1.0, 12.0) as u8;
+        for &r in &eq_bars {
+            paint_glow_rect(r, CornerRadius::same(eq_cap));
+        }
+        paint_glow_rect(right_bar, CornerRadius::same(right_cap));
+        for r in eq_bars {
+            painter.rect_filled(r, CornerRadius::same(eq_cap), color);
+        }
+        painter.rect_filled(right_bar, CornerRadius::same(right_cap), color);
+    } else {
+        if let Some(gc) = glow_color {
+            painter.rect_stroke(
+                mouth_pill_rect.expand(1.2 * u),
+                CornerRadius::same(mouth_cap.saturating_add(1)),
+                Stroke::new(
+                    mouth_stroke + 1.8 * u,
+                    Color32::from_rgba_unmultiplied(
+                        gc.r(),
+                        gc.g(),
+                        gc.b(),
+                        (gc.a() as f32 * 0.16) as u8,
+                    ),
+                ),
+                egui::StrokeKind::Middle,
+            );
+        }
+        paint_glow_rect(mouth_dot_rect, CornerRadius::same(dot_cap));
     }
-    paint_glow_rect(mouth_dot_rect, CornerRadius::same(dot_cap));
 
     // Left eye ("L"): crisp rounded stem + foot (collapses smoothly during blink).
     if stem_h > 0.5 {
@@ -210,14 +307,16 @@ pub fn paint_mascot_fx(
     // Right eye ("I"): vertical rounded capsule.
     painter.rect_filled(right_eye_rect, CornerRadius::same(eye_cap), color);
 
-    // Mouth: hollow horizontal pill + solid vertical pill on the right.
-    painter.rect_stroke(
-        mouth_pill_rect,
-        CornerRadius::same(mouth_cap),
-        Stroke::new(mouth_stroke, color),
-        egui::StrokeKind::Inside,
-    );
-    painter.rect_filled(mouth_dot_rect, CornerRadius::same(dot_cap), color);
+    if music.is_none() {
+        // Idle mouth: hollow horizontal pill + solid vertical pill on the right.
+        painter.rect_stroke(
+            mouth_pill_rect,
+            CornerRadius::same(mouth_cap),
+            Stroke::new(mouth_stroke, color),
+            egui::StrokeKind::Inside,
+        );
+        painter.rect_filled(mouth_dot_rect, CornerRadius::same(dot_cap), color);
+    }
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, kind: IconKind, color: Color32) {

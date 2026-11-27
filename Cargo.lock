@@ -1555,7 +1555,7 @@ dependencies = [
 
 [[package]]
 name = "liebert-dynamic-island"
-version = "0.1.13"
+version = "0.2.0"
 dependencies = [
  "any_ascii",
  "calloop 0.13.0",
