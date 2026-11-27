@@ -10,6 +10,158 @@ tags:
 
 ## 2026-11-27
 
+### Added (v0.2.0)
+
+- `src/ui/icons.rs`, `src/ui/mod.rs`: **Animasi maskot memutar musik (`paint_mascot_music`, `MascotMusicMotion`)** (Windows & Linux) — saat musik aktif diputar, mulut maskot berubah menjadi **3 bar equalizer animasi** (+ kapsul vertikal kanan), mengangguk ke kiri-kanan (`nod_x`), dan melakukan lonjakan pop pembesaran **"yepii"** berkala (`~2,2 s`), sambil tetap menjaga **pelacakan kursor mata** (`eye_offset`) dan **kedip alami** (`eye_open`) di pill musik idle, mode `Mascot`/`Clock`, serta tile Jam tab Home. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-032).
+- `src/state.rs`, `src/ui/mod.rs`: **Countdown bar notifikasi mengecil ke tengah** (`IslandState::collapse_remaining_frac` + `render_compact`) — saat popup notifikasi tampil (`Compact`), bar berwarna brand aplikasi di tepi bawah menyusut simetris ke tengah seiring sisa waktu auto-dismiss (dan tertahan penuh saat hover/Expanded).
+- `src/ui/mod.rs`: **Slide-to-dismiss pada tab `Notifications`** (`render_notifications_tab` + `notif_swipe`) — geser horizontal kartu notifikasi ke kiri atau kanan melewati ambang batas (`max(48px, 28%)`) menampilkan latar hapus merah + ikon `Close` lalu menghapus notifikasi dari riwayat maupun antrean aktif.
+- `src/config.rs`, `src/ui/{mod,settings}.rs`: **Material `Glassmorphism` & peningkatan keterbacaan seluruh mode kaca** (Windows & Linux) — menambah varian kelima `BackgroundMaterial::Glassmorphism` (`theme` bloom dual-orb + specular highlight + border kaca crisp) di Settings (`Theme, Colors & Glass`) maupun pill/expanded overlay; menaikkan floor alpha scrim gelap (`178–224`) serta kecerahan `text_color32`/`muted_color32` pada semua mode kaca (`Acrylic`, `FrostedGlass`, `LiquidGlass`, `Glassmorphism`) agar teks tetap mudah terbaca di wallpaper terang.
+- `src/ui/settings.rs`: **Daftar kontributor GitHub pada tab `About`** — menampilkan `Zahwan316` (Creator · 34 commits) dan `Gjenius20` / `Zjen` (Contributor · 8 commits) sesuai riwayat repositori GitHub.
+
+### Changed (v0.2.0)
+
+- `AGENTS.md`, `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi dirilis ke **`0.2.0`** dengan aturan carry-over semver di `AGENTS.md` §6 (`Z >= 10 → Z = 0, Y += 1`; `Y >= 10 → Y = 0, X += 1`). AppImage & `.tar.gz` Linux serta installer NSIS `3.474.401` byte & `.zip` Windows dibangun ulang; `cargo fmt --all -- --check`, `cargo test --offline` **80 passed**, `cargo clippy --offline --all-targets -- -D warnings`, dan `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` (Docker `rust:slim` + `gcc-mingw-w64-x86-64` + `nsis`) bersih.
+
+### Fixed (v0.2.0)
+
+- `src/lyrics.rs`, `src/ui/mod.rs`: **Perbaikan bug lirik tidak sesuai lagu yang diputar** — menyertakan bucket durasi 5 detik ke kunci `raw_cache`/`enriched_cache` (agar pencarian awal saat `duration = 0` tidak mengunci hasil salah ketika durasi asli tiba), memperketat validasi hasil `/api/search` dan fallback `/api/get` (`lrc_candidate_matches`, `titles_match`, toleransi durasi ±25s, kecocokan artis), serta mereset & memvalidasi kecocokan track `(artist, title)` secara case-insensitive saat `PlatformEvent::Media`, `LyricsLoaded`, dan `apply_snapshot`.
+- `src/state.rs`, `src/platform/windows.rs`: **Penyembunyian nama website/domain pada notifikasi browser Brave** (`is_brave_app`, `is_web_origin_line`, `strip_brave_origin_from_text`) — membuang origin web seperti `web.whatsapp.com`, `via chat.openai.com`, `youtube.com`, dan akhiran `(<domain>)`/`— <domain>` di jalur Linux D-Bus maupun Windows WinRT sebelum teks diringkas.
+
+### Measured (v0.2.0)
+
+- **Settings Wayland CPU (`--settings`, host Hyprland Linux):** **`18,21 MB` RSS (`18652 kB`), `13,47 MB` PSS (`13792 kB`)**; anon/heap private **`3,33 MB`** (`3412 kB`), binary `RssFile` `8,33 MB` PSS (`8526 kB`), shmem `1,81 MB` PSS, driver GPU `0 kB`.
+- **Demo + Overlay Wayland (`--demo`, host Linux saat media CJK aktif):** **`20,01 MB` RSS (`20488 kB`), `16,25 MB` PSS (`16641 kB`)**; anon/heap private **`5,08 MB`** (`5200 kB`, turun dari `5,12 MB`), `NotoSansCJK-Bold`/`Regular` via mmap masing-masing hanya `537 kB` + `375 kB` PSS.
+- **Status target `< 10 MB`:** **Belum tercapai pada total RSS/PSS** (meski anon/private `3,33 MB` & `5,08 MB`) karena halaman kode binary monolitik `RssFile` (`9,2–10,7 MB`) masih memuat `eframe`/`egui_glow`/`winit`/`rustls`/`zbus` dalam satu executable. Host Windows RSS belum dapat diukur pada host Linux. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-032) dan [[02 - Daftar Tugas & Backlog]].
+
+### Added (v0.1.13)
+
+- `src/ui/icons.rs`, `src/ui/mod.rs`: **Animasi kedip & glow maskot idle** (Windows & Linux) — `paint_mascot_fx()` menambah dua pass halo cahaya di belakang kapsul maskot putih serta kelenturan kedip alami ~170 ms setiap ~3,6–5,2 detik yang dikendalikan `step_logic` secara event-driven pada pill idle (`IdleDisplayMode::Mascot`/`Clock`/`Minimal`) maupun tile Jam di Home. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-031).
+- `src/platform/{mod,linux,windows}.rs`, `src/ui/mod.rs`: **Ikon aplikasi notifikasi & tab `Notifications` independen alignment** (Windows & Linux) — ekstraksi ikon 28×28 RGBA di Linux (`hints["image-data"]`/`"icon_data"`/`"image-path"`/`app_icon`/lookup `.desktop`/tema `hicolor` dengan cache terikat 32 entri) dan Windows (`AppInfo().DisplayInfo().GetLogo` + shared `read_stream_ref_bytes`); tab **`NOTIFICATIONS`** (`IslandTab::Notifications`, `notification_history` max 30 entri) menampilkan riwayat lengkap notifikasi beserta kontrol inline (`Popups`, `DND`, `Test`, `Clear`, `Settings`). Baik Compact, Expanded aktif, maupun tab `Notifications` dipaksa rata kiri (`egui::Align::Min`) dan **tidak** terpengaruh `Config::text_align`.
+- `src/ui/mod.rs`: **Komponen Kalender bulanan interaktif di tab Calendar** (`render_calendar_tab`) — tampilan 2 kolom dengan grid bulan 7-kolom `< Month Year >` (cincin hari ini, pill tanggal terpilih, titik indikator tanggal ber-event, klik untuk memfilter event di panel kanan) yang tetap tampil meski URL `.ics` belum diisi.
+- `src/ui/icons.rs`, `src/ui/mod.rs`: **Ikon vektor di tab System Monitor** — menambah `IconKind::{Cpu, Memory, Disk, ArrowDown, ArrowUp, Bell, Info}` serta menempelkan ikon ke ring CPU/RAM/Disk dan baris kecepatan Network.
+- `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: **Material background `Acrylic`, `Frosted Glass`, dan `Liquid Glass` + tab `About`** — menambah enum `BackgroundMaterial::{Solid, Acrylic, FrostedGlass, LiquidGlass}` dengan pemilih pill chip di Settings → Display (`Theme, Colors & Glass`) yang mewarnai latar pill/expanded (berikut tekstur grain 32×32 repeat untuk Acrylic, mist es untuk Frosted Glass, dan kilau Fresnel/meniskus atas-bawah untuk Liquid Glass termasuk pada mode Notch) serta latar dashboard Settings; ditambah tab **`About`** (`SettingsTab::About`) berisi info pembuat (`Zahwan316`), versi (`env!("CARGO_PKG_VERSION")`), URL repo (`Copy URL`), lisensi `GPL-3.0-or-later`, dan profil runtime aktif.
+
+### Changed (v0.1.13)
+
+- `src/ui/mod.rs`: **Perbaikan total layout tab Home Gallery Grid (`render_overview_tab`, tinggi expanded `208*s`), header expanded Bold tanpa garis pemisah, & jam font Bold**:
+  - Mengganti widget nested `ui.horizontal`/`right_to_left` di dalam tiap tile Home dengan tata letak `Rect` eksplisit (`gallery_grid_layout` hingga 4×2 / baris akhir rata penuh + `paint_gallery_header_in_rect`) sehingga tidak ada tumpang-tindih atau clipping di Linux maupun Windows.
+  - Menghilangkan `ui.separator()` di antara header dan konten saat mode Expanded, memakai `ui_bold_font()` pada judul header expanded (`HOME`, `NOTIFICATIONS`, dll.), judul notifikasi, serta jam (`build_clock_layout_job` & tile Jam Home) — dengan memuat 1 font Bold Latin ringan (~300 KB mmap) pada `apply_configured_fonts_light` tanpa membebani heap dengan font CJK Bold 20 MB.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.13`**; AppImage (`6,4 MB`) + `.tar.gz` (`6,2 MB`) Linux serta `.zip` (`4,2 MB`) + NSIS installer `liebert-dynamic-island-windows-x86_64-setup.exe` (`3,4 MB`) dibangun dan diverifikasi. `cargo fmt --all -- --check`, `cargo test --offline` **77 passed**, `cargo clippy --offline --all-targets -- -D warnings`, dan `cargo clippy --offline --target x86_64-pc-windows-gnu --all-targets -- -D warnings` (Docker `rust:slim` + `gcc-mingw-w64-x86-64` + `nsis`) bersih.
+
+### Measured (v0.1.13)
+
+- **Settings Wayland CPU (`--settings`, host Hyprland Linux):** **`19,58 MB` RSS (`20052 kB`), `13,83 MB` PSS (`14165 kB`)**; anon/heap private tetap rendah **`3,31 MB`** (`3392 kB`), binary `RssFile` `7,97 MB` PSS (`8163 kB`), shmem compositor `2,55 MB` PSS (`2610 kB`), `NotoSans-Regular.ttf` via mmap hanya `38 kB` PSS, dan driver GPU/LLVM **`0 kB`**.
+- **Demo + Overlay Wayland (`--demo` settled idle + glow/blink maskot, host Linux):** **`18,95 MB` RSS (`19408 kB`), `15,07 MB` PSS (`15434 kB`)**; anon/heap private **`5,12 MB`** (`5248 kB`), binary `RssFile` `9,80 MB` PSS (`10032 kB`), shmem `0,15 MB` PSS, font Bold `NotoSans-Bold.ttf` via mmap hanya menambah **`71 kB` PSS**.
+- **Status target `< 10 MB`:** **Belum tercapai pada total RSS/PSS** (meski private anon/heap sudah `3,31 MB` dan `5,12 MB`). Penghalang struktural tetap pada halaman kode/rodata executable tunggal `RssFile` (`~9,2–10,7 MB`) karena seluruh stack GUI, `eframe`/`egui_glow`/`winit`/`zbus`/`tray-icon`/`rustls` berada di satu binary; pemisahan daemon vs UI binary atau penghapusan jalur `eframe`/GL tetap menjadi syarat untuk menembus `< 10 MB` total RSS. Host Windows RSS belum diukur pada host Linux. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-031) dan [[02 - Daftar Tugas & Backlog]].
+
+### Added (v0.1.12)
+
+- `src/state.rs`: **Sanitasi notifikasi web/markup (`sanitize_notification_text`, `sanitized_notification_item`)** lintas OS untuk menghapus tag HTML/XML (seperti `<a href="...">...</a>`, `<b>`, `<i>`, `<br/>`, tag terpotong `<a href="...`) dan men-decode entitas HTML (`&amp;`, `&lt;`, `&quot;`, `&#x27;`, `&nbsp;`, numerik dec/hex) termasuk markup ter-escape ganda (`&lt;a href=...&gt;`) sambil mempertahankan teks non-HTML seperti `1 < 2`, `<3`, dan alamat `<user@example.com>`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-030).
+
+### Changed (v0.1.12)
+
+- `src/ui/mod.rs`: **Desain ulang tab Home bergaya Gallery Grid** (`render_overview_tab`, tinggi expanded `Overview` `196*s`) menjadi grid simetris kartu berukuran seragam (`cols = 1/2/3`, 3×2 saat semua modul aktif) dengan `render_gallery_tile_header`, tile visual `Clock` (berikut hero maskot `paint_mascot`), `Music` (artwork thumbnail + lyric + pill bar), `System` (pill meter CPU/RAM/Disk), `Tasks`, `Focus`, `Events`, dan `Battery` opsional untuk melengkapi grid.
+- `Cargo.toml`, `src/platform/wayland_settings.rs`: **Task RAM `< 10 MB`** — profile rilis memakai `lto = "fat"` + `opt-level = "z"` (ukuran binary Linux turun `17 MB → 15 MB`, installer NSIS payload turun ke ~9,8 MB uncompressed / ~3,29 MB LZMA) serta inisialisasi SHM `SlotPool` `wayland_settings.rs` dipangkas ke 1× buffer (`byte_len`) dan tumbuh sesuai kebutuhan compositor. Lihat **Measured (v0.1.12)**.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.12`**; AppImage (`6,4 MB`) + `.tar.gz` (`6,1 MB`) Linux serta installer NSIS + zip Windows dibangun ulang. `cargo fmt --all -- --check`, `cargo test` **76 passed**, `cargo clippy --all-targets -- -D warnings`, dan clippy `x86_64-pc-windows-gnu` (Docker `rust:slim`) bersih.
+
+### Fixed (v0.1.12)
+
+- `src/state.rs`, `src/platform/linux.rs`, `src/platform/windows.rs`: Notifikasi WhatsApp Web dan browser (Windows WinRT `ToastGeneric` + Linux D-Bus `Notify` & passive monitor `BecomeMonitor`) kini selalu disanitasi sebelum masuk `IslandState::push_notification`, sehingga tag `<a href=...>` maupun entitas HTML tidak lagi bocor ke UI.
+
+### Measured (v0.1.12)
+
+- **Settings Wayland CPU (`--settings`, host Hyprland Linux):** turun lagi dari `17,63 MB RSS` (`13,05 MB PSS`) → **`16,94 MB` RSS (`17348 kB`), `12,82 MB` PSS (`13124 kB`)**; anon/heap private hanya **`3,30 MB`** (`3380 kB`), binary `RssFile` turun ke `8,90 MB` PSS (`9116 kB`), shmem `1,27 MB` PSS.
+- **Demo + Overlay Wayland (`--demo` settled idle + maskot, host Linux):** turun dari `24,63 MB RSS` (`19,36 MB PSS`) → **`18,85 MB` RSS (`19304 kB`), `15,08 MB` PSS (`15447 kB`)**; anon/heap private turun di bawah 5 MB (**`4,98 MB`** / `5096 kB`), binary `RssFile` turun dari `14024 → 10600 kB`.
+- **Status target `< 10 MB`:** **Belum tercapai pada total RSS/PSS** (meski anon/private RAM sudah `3,30 MB` dan `4,98 MB`). Penghalang tersisa adalah `RssFile` kode/rodata dari satu executable monolitik (`eframe`/`egui_glow`/`winit`/`rustls`/`zbus`/`tray-icon`); menembus `< 10 MB` total membutuhkan pemisahan executable ringan atau menghapus fallback `eframe`/OpenGL. Host Windows RSS belum dapat diukur dari Linux. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-030) dan [[02 - Daftar Tugas & Backlog]].
+
+### Added (v0.1.11)
+
+- `src/config.rs`, `src/platform/{mod,linux,windows}.rs`, `src/ui/{icons,mod,settings}.rs`, `src/main.rs`: **Maskot idle pelacak kursor** (Windows & Linux). Ditambahkan mode `IdleDisplayMode::Mascot` dan toggle `Config::show_idle_mascot` (default `true`); `icons::paint_mascot()` menggambar wajah kapsul putih minimal (`L` + `I` mata bergerak mengikuti posisi kursor ternormalisasi via Hyprland/X11 `cursor_screen_info` di Linux dan `GetCursorPos` + DPI di Windows, serta mulut kapsul berlubang + kapsul vertikal kecil di kanan). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-029).
+- `src/platform/wayland_settings.rs`, `src/platform/windows_settings.rs`, `src/platform/mod.rs`, `src/ui/settings.rs`: **Renderer Settings CPU murni (`SoftCanvas`)** pada Linux Wayland (`wl_shm` + `xdg_shell` CSD/SSD) dan Windows Win32 (`CreateDIBSection` + `BitBlt`), mempertahankan `eframe` hanya untuk fallback X11 sehingga driver OpenGL/EGL/LLVM tidak lagi dimuat pada proses Settings utama.
+
+### Changed (v0.1.11)
+
+- `src/ui/mod.rs`, `src/ui/icons.rs`: **Tab Home bergaya Bento Grid** (Windows & Linux) dengan kartu metrik membulat dan `paint_pill_bar` chart (CPU, RAM, Disk, Tasks, Calendar/Timer) serta status ringkas bebas teks/ikon berlebih.
+- `src/ui/settings.rs`: **Desain ulang dashboard Bento Grid** (Windows & Linux) dengan sidebar ikon + mini-maskot live di kiri, kartu 2 kolom adaptif (`bento_2col` / `bento_card`), pill toggle chip, pill chart indikator baterai/konfigurasi, dan pemindaian font terinstal secara lazy.
+- `Cargo.toml`, `Cargo.lock`, `src/ui/mod.rs`, `src/ui/taskbar.rs`, `src/platform/{wayland_layer,windows_overlay}.rs`, `src/main.rs`: **Task RAM `< 10 MB`** — `memmap2::Mmap` (`load_font_blob`) memetakan font sistem secara shareable tanpa menumpuk blob `NotoSansCJK` 19–20 MB ke heap, fitur `default_fonts` `eframe` dinonaktifkan (`apply_configured_fonts_light` menunda pemuatan `LyricsBold` dan taskbar memakai label ASCII `CPU`/`RAM`/`DSK`), batas `max_texture_side` diturunkan dari `2048` ke `1024`, `SlotPool` Wayland menyusut ke 512 KB setelah collapse, dan Settings dipindah ke CPU rasterizer. Lihat **Measured (v0.1.11)**.
+- `Cargo.toml`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.11`**; `Liebert_Dynamic_Island-0.1.11-x86_64.AppImage` + `.tar.gz` Linux dan `liebert-dynamic-island-windows-x86_64-setup.exe` + `.zip` Windows (via Docker `rust:slim` + `gcc-mingw-w64-x86-64` + `nsis`) dibangun ulang. `cargo test` **75 passed**, `cargo fmt --all -- --check` bersih, `cargo clippy --all-targets -- -D warnings` bersih, dan `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` bersih.
+
+### Fixed (v0.1.11)
+
+- `src/ui/mod.rs`, `src/platform/linux.rs`: **Perbaikan bug putih lirik karaoke nge-blink** (Windows & Linux) — `paint_karaoke_in_rect` dan `render_wrapped_karaoke` kini memisahkan region clip kiri (putih) dan kanan (redup) secara saling lepas agar tepi anti-aliased tidak double-blend/pop di `p >= 0.999`; `scroll_x` menggunakan lebar galai utuh (bukan `.min(avail_w)`); `PillLyricTransition` melacak `prev_progress` alih-alih melompat ke `1.0`; mundur waktu media `< 750 ms` pada `PlatformEvent::Media` dan `periodic_lock` MPRIS2 disaring agar garis progress tidak berkedip mundur setiap 2,5 detik.
+- Live Wayland smoke test & fix `epaint`: batas `max_texture_side` dinaikkan dari `512` ke `1024` karena `epaint::TextureAtlas::new` meng-assert `size[0] >= 1024`.
+
+### Measured (v0.1.11)
+
+- **Settings Wayland CPU (`--settings`, host Hyprland Linux):** turun drastis dari `VmRSS 90,2 MB` / `Pss 78,2 MB` → **`Rss 17,63 MB` (`18052 kB`), `Pss 13,05 MB` (`13363 kB`)**; heap + anon private (`Pss_Anon`/`Private_Dirty`) hanya **`3,51 MB`** (`[heap] 1240 kB` + `[anon] 576 kB`), shmem `memfd` **`1,27 MB` PSS**, dan `libnvidia`/`libLLVM` **0 KB**.
+- **Demo + Overlay Wayland (`--demo` settled idle + mascot, host Linux):** turun dari `VmRSS 63,1 MB` / `Pss 59,0 MB` → **`Rss 24,63 MB` (`25220 kB`), `Pss 19,36 MB` (`19824 kB`)**; `Pss_Anon`/`Private_Dirty` hanya **`5,75 MB`**, `NotoSansCJK` via `mmap` hanya memetakan `428 kB` PSS (`Regular`) + `340 kB` PSS (`Bold`) halaman font terpakai.
+- **Status target `< 10 MB`:** **Belum tercapai pada total RSS/PSS** (walaupun memori private anon/heap sudah `3,51 MB` dan `5,75 MB`). Penghalang utama kini adalah **halaman kode/rodata binary monolitik** (`RssFile` binary sendiri `9,60 MB` PSS di `--settings` dan `13,70 MB` PSS di `--demo`) karena `eframe`/`egui_glow`/`winit`/`rustls`/`zbus`/`tray-icon` masih dikompilasi ke satu executable 17 MB. RSS Windows belum terukur dari host Linux (Settings Win32 kini juga CPU `BitBlt` bebas GL). Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-029) dan [[02 - Daftar Tugas & Backlog]].
+
+### Added (v0.1.10)
+
+- `src/ui/mod.rs`: **Animasi pergantian tab** (both) untuk next/prev via arrow keyboard, chevron samping, dan click-through Home/tombol Battery. `TabSwitch` menyimpan arah + `Instant`; konten baru masuk dengan fade (180 ms) dan sedikit slide dari sisi navigasi. Hanya meminta repaint cepat selama transisi—idle tidak berubah. Test `tab_transition_slides_in_from_nav_side_and_finishes`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-028).
+
+### Changed (v0.1.10)
+
+- `src/ui/mod.rs`: Expanded card memakai **satu lebar untuk semua tab** (`468*s`) sehingga perpindahan tab tidak menggeser kartu; header label tab kini benar-benar terpusat di kolomnya, spacer horizontal header dan jam Home dinolkan agar perhitungan centering presisi. Kolom Music kiri/kanan disamakan, lebar wrap lirik dipatok ke kolom agar scrollbar tidak menggeser teks, dan grup transport menghitung gap kelima. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-028).
+- `src/ui/settings.rs`: Settings dibuat lebih minimalis (both): judul tab duplikat dihapus, `settings_group()` kini flat tanpa kartu bertingkat, margin panel `14 → 10`, rail tab `120 → 104`, spacing item `8×6 → 6×4`, serta hint/teks penjelas yang berulang dipangkas tanpa menghapus satu pun kontrol.
+- `src/ui/mod.rs`: Palet gradient lebih lembut (both): `soft_accent_rgb()` menarik warna album/aksen ke abu netral dan membatasi kecerahan (`≤190`), wash dimulai lebih awal dengan kekuatan `0,55` (dulu `0,85`), rose glow dipaksa diganti highlight netral dingin, dan base pill/dock jadi abu gelap `[10,10,13]` / `[14,15,19]`. Warna donut/status neon juga diredupkan. Test `soft_accent_mutes_loud_colors_without_losing_hue`.
+- `src/ui/mod.rs`, `src/ui/settings.rs`: Task RAM — blob font kini di-`Arc`-kan dan dibagikan antarface (menghapus salinan heap byte font), fallback `user_selected_regular_fallback` tidak lagi menyimpan `Vec<u8>` yang tak terpakai, dan launcher Settings Unix memakai `exec` untuk percobaan hardware GL sehingga tidak ada proses launcher tambahan ~7 MB. Lihat **Measured** di bawah.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.10`**; AppImage + tar.gz Linux dan installer + zip Windows dibangun ulang. `cargo test` **74 passed**, `cargo fmt --all -- --check` bersih, `cargo clippy --all-targets -- -D warnings` bersih, clippy Windows-target bersih (Docker `rust:slim` + `gcc-mingw-w64-x86-64`).
+
+### Fixed (v0.1.10)
+
+- `src/ui/mod.rs`: Ruang kosong di atas expanded hilang (both)—inset atas `9*s → 2*s` (kartu musik `10*s → 2*s`) dan separator dipadatkan; ambang `expand_alpha` diturunkan agar konten muncul lebih awal saat kartu membuka. Gutter arrow dan chevron tengah tidak berubah.
+- `src/ui/mod.rs`: Jam Home kini menampilkan label zona waktu sebaris (menggantikan placeholder "No music playing" yang memakan satu baris), sehingga info tetap lengkap tanpa baris tambahan.
+
+### Measured (v0.1.10)
+
+- Overlay Wayland/`--demo` (host Linux): `VmRSS 63,1 MB` (63.100 kB), `Pss 59,0 MB`, `RssAnon 46,1 MB`, `RssFile 16,7 MB` — praktis sama dengan baseline sebelum perubahan. Dedup byte font tidak terlihat pada skala ini karena font sistem merupakan `RssFile`/blok heap kecil; Investigasi menunjukkan ~52 MB region anonymous private-dirty milik dependency di luar egui.
+- Jendela Settings (host NVIDIA, `VmRSS 90,2 MB`, `Pss 78,2 MB`, `RssFile 67,8 MB`) — turun dari `102,8 MB` terutama karena proses launcher diganti `exec`; tetap didominasi `libnvidia-gpucomp`/`libnvidia-eglcore`/`libLLVM`. RSS Windows tidak terukur dari host Linux.
+- **Target `< 10 MB` belum tercapai** untuk overlay maupun Settings. Rincian penghalang dan utang teknis dicatat di [[03 - Catatan Rapat & Keputusan]] (ADR-028) dan [[02 - Daftar Tugas & Backlog]].
+
+### Added (v0.1.9)
+
+- `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambah opsi idle **`Battery`** pada `IdleDisplayMode` (Settings → Idle Display & Clock) untuk menampilkan persentase/status baterai di pill saat idle pada Linux dan Windows; jika tidak ada baterai terdeteksi, pill menampilkan `No battery`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-027).
+
+### Changed (v0.1.9)
+
+- `src/ui/mod.rs`: Layout expanded diberi gutter kiri/kanan mengikuti lebar tombol arrow side-nav sehingga konten tidak lagi tertutup panah; header tab dirapikan (label + settings), dan tab **Home** dibuat lebih minimalis (jam ringkas, baris info lebih padat). Lihat [[01 - Arsitektur & Spesifikasi]].
+
+### Fixed (v0.1.9)
+
+- `src/ui/mod.rs`: Memperbaiki ruang kosong atas pada konten expanded dengan menyelaraskan inset konten ke rect kartu dan gutter arrow (both).
+
+### Added (v0.1.8)
+
+- `src/config.rs`, `src/platform/mod.rs`, `src/platform/windows.rs`, `src/platform/linux.rs`, `src/ui/settings.rs`, `src/daemon.rs`, `src/ui/mod.rs`: **Autostart "Start with OS"** untuk Windows **dan** Linux, tanpa Administrator/root. Windows menulis/ Menghapus nilai HKCU `...\CurrentVersion\Run\LiebertDynamicIsland` memakai API registry `windows 0.62` (`Win32_System_Registry` ditambahkan ke `Cargo.toml`); Linux menulis/menghapus `~/.config/autostart/liebert-dynamic-island.desktop` dengan `Exec` sadar `APPIMAGE` (path AppImage persisten, bukan mount AppDir sementara). Toggle ada di Settings → System → **Startup** dan hanya diterapkan saat nilainya berubah (jalur Settings mandiri, Settings inline, dan `UiToDaemon::ConfigSaved`). `installer/windows/installer.nsi`: uninstaller kini menghapus nilai Run tersebut agar tidak ada entri autostart yatim. Test murni: `windows_autostart_command_quotes_paths_with_spaces`, `desktop_autostart_entry_has_required_keys`, `desktop_exec_escapes_shell_metacharacters`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-026).
+- `src/ui/mod.rs`, `src/ui/settings.rs`, `src/config.rs`: **Tab Battery** baru (both), muncul saat `show_battery = true`, menampilkan donut persentase, status (Charging/Discharging/Full), sisa waktu, dan animasi charging berupa segmen berjalan + titik orbit (`request_repaint_after(33 ms)` hanya saat tab Battery aktif dan sedang charge/full). PC tanpa baterai menampilkan **`No battery detected`** sesuai preferensi pengguna. Settings kini punya 7 tab dengan grup **Battery Tab**, **Device Status**, dan **Low Battery Alerts**.
+- `src/platform/linux.rs`: **Fallback notifikasi pasif** untuk Linux. Bila `org.freedesktop.Notifications` sudah dipegang daemon lain (dalam pengujian: quickshell), aplikasi tidak gagal—`BecomeMonitor` (`org.freedesktop.DBus.Monitoring`) memantau method call `Notify`/`CloseNotification` dan meneruskannya ke antrean yang sama dengan listener langsung. `--spike-notifications` kini melaporkan pemilik nama dan mode monitor; status listener tetap `Listening` bila fallback aktif, atau `Error` yang menjelaskan kedua kegagalan bila keduanya tidak tersedia. Test baru `monitored_notify_message_decodes_into_notification` membuktikan dekode method call `Notify` menjadi `NotificationItem`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-026).
+
+### Changed (v0.1.8)
+
+- `src/ui/mod.rs`: Chart CPU/RAM/Disk di tab System kini **donut chart vektor** (`paint_donut` + `render_stat_donut`) menggantikan progress bar horizontal (both); label disk Linux menjadi `Disk /` dan Windows `Disk C:`. Baris baterai di tab System dipangkas—baterai kini punya tab sendiri dengan tombol lompat cepat.
+- `src/ui/mod.rs`: **Ruang arrow kiri/kanan** di expanded disediakan dengan inset konten tengah (`draw_side_nav` tetap menggambar chevron di tengah tepi kartu), sehingga tombol tidak menimpa teks. Tab **Home** lebih rapi: separator + jarak antarbaris yang konsisten, dan tab **Tasks** kini menampilkan `{pending} pending • {done} done`, progress bar, baris kartu dengan latar halus, serta area scroll lebih tinggi (both).
+- `src/ui/settings.rs`: Isi panel kanan dikelompokkan—judul tab di atas, lalu `settings_group()` (judul grup → isi) untuk **Startup**, **Taskbar System Monitor**, **Battery Tab**, **Device Status**, dan **Low Battery Alerts**; grup System/Battery lama dirapikan (both).
+- `src/sysmon.rs`: Deteksi penyimpanan Linux kini mengagregasi **seluruh filesystem mount nyata** dari `df -P -k` (root + `/home` + `/var`, dll.), bukan hanya `/`; filesystem pseudo (`tmpfs`, `cgroup`, `sysfs`, …) dilewati agar tidak mengacaukan persentase. Cache kapasitas 10 detik dipertahankan. Test: `linux_df_capacity_aggregates_system_mounts_and_skips_pseudo_filesystems`.
+- `src/ui/mod.rs`, `src/ui/settings.rs`: Optimasi RAM lanjutan—hash album art dihitung sekali per sidik jari pointer+byte tepi (`album_art_fingerprint`/`album_art_hash`) alih-alih setiap repaint, dan lebar idle clock di-cache per detik tampilan (`clock_width_cache`) agar tidak layout ulang glyph tiap frame. Lihat **Measured** di bawah untuk hasil sebenarnya.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.8`**; AppImage + tar.gz Linux dan installer + zip Windows dibangun ulang. `cargo test` **72 passed**, `cargo clippy --all-targets -- -D warnings` bersih, clippy Windows-target (container Docker) bersih.
+
+### Fixed (v0.1.8)
+
+- `src/platform/linux.rs`: Notifikasi Linux yang "tidak masuk ke Dynamic Island" kini tersampaikan lewat mode monitor pasif tanpa perlu menghentikan daemon notifikasi pengguna; `--spike-notifications` tidak lagi salah melaporkan "free to claim" ketika ada incumbent.
+- `README.md`: Catatan troubleshooting Linux diperbarui—cukup pastikan sesi D-Bus tersedia; bila nama dipegang daemon lain, aplikasi otomatis memakai mode monitor (sebelumnya pengguna disuruh menghentikan daemon).
+
+### Measured (v0.1.8)
+
+- Overlay Wayland/`--demo`: `VmRSS 63,1 MB`, `Pss 59,0 MB`, `RssAnon 46,1 MB`, `RssFile 16,6 MB` (proses yang sama, setelah fitur baru). Target **`< 10 MB` belum tercapai**—didominasi halaman kode/font `egui` dan pustaka grafis host yang tersentuh saat startup, bukan oleh alokasi per-frame; cache baru menghapus pekerjaan berulang tetapi tidak mengecilkan resident set secara drastis.
+- Jendela Settings pada host NVIDIA tidak diukur ulang pada rilis ini; nilai v0.1.6 (`VmRSS 102,8 MB` / `Pss 69,0 MB`) tetap menjadi rujukan. RSS Windows tidak dapat diukur dari host Linux. Utang teknis target `< 10 MB` tetap terbuka (lihat ADR-023/024/026).
+
+### Added (v0.1.7) — Windows Installer
+
+- `installer/windows/installer.nsi`, `README.md`, `dist/liebert-dynamic-island-windows-x86_64-setup.exe`, `dist/liebert-dynamic-island-windows-x86_64.zip`: Installer Windows **berhasil dibangun di host Linux** memakai container Docker `rust:slim` + `nsis` + `gcc-mingw-w64-x86-64`. Binary di-cross-compile ke `x86_64-pc-windows-gnu`, lalu `makensis -DAPP_VERSION=0.1.7 -DSTAGING_DIR=... -DOUT_FILE=...` menghasilkan installer NSIS per-user (Start Menu + uninstaller). Catatan: di Linux opsi `makensis` memakai `-D`, bukan `/D`; perintah lengkap ditambahkan ke `README.md`.
+- Artefak terverifikasi: `dist/liebert-dynamic-island-windows-x86_64-setup.exe` **`4,06 MB`** (SHA256 `204b41f7508d3e591882fd96edd318b8ca252a73ffb18649ee4ba514ddf19b00`), `dist/liebert-dynamic-island-windows-x86_64.zip` **`5,0 MB`**. `file` mengenali installer sebagai `Nullsoft Installer self-extracting archive`, dan `7z l` menunjukkan payload `liebert-dynamic-island.exe`, `LICENSE.md`, `README.md`, serta `uninstall.exe`. Tidak ada perubahan kode Rust pada request ini; keduanya berada di `dist/` yang di-gitignore.
+
 ### Changed (v0.1.7)
 
 - `src/ui/mod.rs`: Header mode Expanded kini **hanya** menampilkan tulisan tab aktif dan tombol Settings; strip tab, chevron header, dan toggle Notch/Island dihapus (toggle tetap tersedia di Settings → Display). Navigasi Left/Right sudah tersedia lewat keyboard, dan tombol chevron vektor dipindah ke **tengah tepi kiri/kanan kartu expanded** (`draw_side_nav`, `ui.interact` + `paint_icon`) sehingga tidak mengganggu baris header. Berlaku untuk Linux **dan** Windows karena keduanya memakai `render_island_ui`.

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use eframe::egui::{Color32, ClippedPrimitive, TextureFilter, TextureId, TextureOptions, TextureWrapMode, TexturesDelta};
+use eframe::egui::{
+    ClippedPrimitive, Color32, TextureFilter, TextureId, TextureOptions, TextureWrapMode,
+    TexturesDelta,
+};
 use eframe::epaint::{ImageData, Mesh, Primitive, Vertex, WHITE_UV};
 
 struct SoftTexture {
@@ -22,9 +25,13 @@ impl SoftTexture {
         let v = apply_wrap(v, self.options.wrap_mode);
 
         // `epaint::WHITE_UV` sits inside the white pixel at texel (0, 0).
-        if self.options.magnification == TextureFilter::Nearest && self.options.minification == TextureFilter::Nearest {
-            let ix = ((u * self.width as f32).floor() as isize).clamp(0, self.width as isize - 1) as usize;
-            let iy = ((v * self.height as f32).floor() as isize).clamp(0, self.height as isize - 1) as usize;
+        if self.options.magnification == TextureFilter::Nearest
+            && self.options.minification == TextureFilter::Nearest
+        {
+            let ix = ((u * self.width as f32).floor() as isize).clamp(0, self.width as isize - 1)
+                as usize;
+            let iy = ((v * self.height as f32).floor() as isize).clamp(0, self.height as isize - 1)
+                as usize;
             return self.pixels[iy * self.width + ix].to_array();
         }
 
@@ -55,10 +62,26 @@ impl SoftTexture {
         let w11 = tx * ty;
 
         [
-            (p00[0] as f32 * w00 + p10[0] as f32 * w10 + p01[0] as f32 * w01 + p11[0] as f32 * w11 + 0.5) as u8,
-            (p00[1] as f32 * w00 + p10[1] as f32 * w10 + p01[1] as f32 * w01 + p11[1] as f32 * w11 + 0.5) as u8,
-            (p00[2] as f32 * w00 + p10[2] as f32 * w10 + p01[2] as f32 * w01 + p11[2] as f32 * w11 + 0.5) as u8,
-            (p00[3] as f32 * w00 + p10[3] as f32 * w10 + p01[3] as f32 * w01 + p11[3] as f32 * w11 + 0.5) as u8,
+            (p00[0] as f32 * w00
+                + p10[0] as f32 * w10
+                + p01[0] as f32 * w01
+                + p11[0] as f32 * w11
+                + 0.5) as u8,
+            (p00[1] as f32 * w00
+                + p10[1] as f32 * w10
+                + p01[1] as f32 * w01
+                + p11[1] as f32 * w11
+                + 0.5) as u8,
+            (p00[2] as f32 * w00
+                + p10[2] as f32 * w10
+                + p01[2] as f32 * w01
+                + p11[2] as f32 * w11
+                + 0.5) as u8,
+            (p00[3] as f32 * w00
+                + p10[3] as f32 * w10
+                + p01[3] as f32 * w01
+                + p11[3] as f32 * w11
+                + 0.5) as u8,
         ]
     }
 }
@@ -83,7 +106,11 @@ fn wrap_index(idx: isize, len: usize, mode: TextureWrapMode) -> usize {
         TextureWrapMode::Repeat => idx.rem_euclid(n) as usize,
         TextureWrapMode::MirroredRepeat => {
             let m = idx.rem_euclid(2 * n);
-            if m >= n { (2 * n - 1 - m) as usize } else { m as usize }
+            if m >= n {
+                (2 * n - 1 - m) as usize
+            } else {
+                m as usize
+            }
         }
     }
 }
@@ -201,10 +228,18 @@ impl SoftCanvas {
             if mesh.indices.len() < 3 || mesh.vertices.is_empty() {
                 continue;
             }
-            let clip_x0 = (clipped.clip_rect.min.x * ppp).round().clamp(0.0, width_px as f32) as i32;
-            let clip_y0 = (clipped.clip_rect.min.y * ppp).round().clamp(0.0, height_px as f32) as i32;
-            let clip_x1 = (clipped.clip_rect.max.x * ppp).round().clamp(0.0, width_px as f32) as i32;
-            let clip_y1 = (clipped.clip_rect.max.y * ppp).round().clamp(0.0, height_px as f32) as i32;
+            let clip_x0 = (clipped.clip_rect.min.x * ppp)
+                .round()
+                .clamp(0.0, width_px as f32) as i32;
+            let clip_y0 = (clipped.clip_rect.min.y * ppp)
+                .round()
+                .clamp(0.0, height_px as f32) as i32;
+            let clip_x1 = (clipped.clip_rect.max.x * ppp)
+                .round()
+                .clamp(0.0, width_px as f32) as i32;
+            let clip_y1 = (clipped.clip_rect.max.y * ppp)
+                .round()
+                .clamp(0.0, height_px as f32) as i32;
             if clip_x1 <= clip_x0 || clip_y1 <= clip_y0 {
                 continue;
             }
@@ -336,9 +371,18 @@ fn rasterize_triangle(
         return;
     }
 
-    let p0 = ScreenPt { x: v0.pos.x * ppp, y: v0.pos.y * ppp };
-    let mut p1 = ScreenPt { x: v1.pos.x * ppp, y: v1.pos.y * ppp };
-    let mut p2 = ScreenPt { x: v2.pos.x * ppp, y: v2.pos.y * ppp };
+    let p0 = ScreenPt {
+        x: v0.pos.x * ppp,
+        y: v0.pos.y * ppp,
+    };
+    let mut p1 = ScreenPt {
+        x: v1.pos.x * ppp,
+        y: v1.pos.y * ppp,
+    };
+    let mut p2 = ScreenPt {
+        x: v2.pos.x * ppp,
+        y: v2.pos.y * ppp,
+    };
 
     let mut area = edge_fn(p0, p1, p2);
     if area.abs() < 1e-5 {
@@ -394,7 +438,10 @@ fn rasterize_triangle(
         let fy = py as f32 + 0.5;
         let row_offset = (py as usize) * stride_px;
         for px in min_x..max_x {
-            let p = ScreenPt { x: px as f32 + 0.5, y: fy };
+            let p = ScreenPt {
+                x: px as f32 + 0.5,
+                y: fy,
+            };
             let w0 = edge_fn(p1, p2, p);
             if if top_left_0 { w0 < 0.0 } else { w0 <= 0.0 } {
                 continue;
@@ -422,10 +469,14 @@ fn rasterize_triangle(
                 c
             } else {
                 [
-                    (c0[0] as f32 * b0 + c1[0] as f32 * b1 + c2[0] as f32 * b2 + 0.5).clamp(0.0, 255.0) as u8,
-                    (c0[1] as f32 * b0 + c1[1] as f32 * b1 + c2[1] as f32 * b2 + 0.5).clamp(0.0, 255.0) as u8,
-                    (c0[2] as f32 * b0 + c1[2] as f32 * b1 + c2[2] as f32 * b2 + 0.5).clamp(0.0, 255.0) as u8,
-                    (c0[3] as f32 * b0 + c1[3] as f32 * b1 + c2[3] as f32 * b2 + 0.5).clamp(0.0, 255.0) as u8,
+                    (c0[0] as f32 * b0 + c1[0] as f32 * b1 + c2[0] as f32 * b2 + 0.5)
+                        .clamp(0.0, 255.0) as u8,
+                    (c0[1] as f32 * b0 + c1[1] as f32 * b1 + c2[1] as f32 * b2 + 0.5)
+                        .clamp(0.0, 255.0) as u8,
+                    (c0[2] as f32 * b0 + c1[2] as f32 * b1 + c2[2] as f32 * b2 + 0.5)
+                        .clamp(0.0, 255.0) as u8,
+                    (c0[3] as f32 * b0 + c1[3] as f32 * b1 + c2[3] as f32 * b2 + 0.5)
+                        .clamp(0.0, 255.0) as u8,
                 ]
             };
 
@@ -458,10 +509,26 @@ mod tests {
     fn solid_quad_primitive(rect: Rect, color: Color32) -> ClippedPrimitive {
         let mut mesh = Mesh::default();
         let verts = [
-            Vertex { pos: rect.left_top(), uv: WHITE_UV, color },
-            Vertex { pos: rect.right_top(), uv: WHITE_UV, color },
-            Vertex { pos: rect.right_bottom(), uv: WHITE_UV, color },
-            Vertex { pos: rect.left_bottom(), uv: WHITE_UV, color },
+            Vertex {
+                pos: rect.left_top(),
+                uv: WHITE_UV,
+                color,
+            },
+            Vertex {
+                pos: rect.right_top(),
+                uv: WHITE_UV,
+                color,
+            },
+            Vertex {
+                pos: rect.right_bottom(),
+                uv: WHITE_UV,
+                color,
+            },
+            Vertex {
+                pos: rect.left_bottom(),
+                uv: WHITE_UV,
+                color,
+            },
         ];
         mesh.vertices.extend_from_slice(&verts);
         mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
@@ -530,8 +597,14 @@ mod tests {
 
         // Scaled by 2.0 => physical clip rect is [2..6, 2..6].
         assert_eq!(&rgba[(10 + 1) * 4..(10 + 1) * 4 + 4], &[0, 0, 0, 0]);
-        assert_eq!(&rgba[(2 * 10 + 2) * 4..(2 * 10 + 2) * 4 + 4], &[10, 20, 30, 255]);
-        assert_eq!(&rgba[(5 * 10 + 5) * 4..(5 * 10 + 5) * 4 + 4], &[10, 20, 30, 255]);
+        assert_eq!(
+            &rgba[(2 * 10 + 2) * 4..(2 * 10 + 2) * 4 + 4],
+            &[10, 20, 30, 255]
+        );
+        assert_eq!(
+            &rgba[(5 * 10 + 5) * 4..(5 * 10 + 5) * 4 + 4],
+            &[10, 20, 30, 255]
+        );
         assert_eq!(&rgba[(6 * 10 + 6) * 4..(6 * 10 + 6) * 4 + 4], &[0, 0, 0, 0]);
     }
 
@@ -565,10 +638,26 @@ mod tests {
         let mut mesh = Mesh::with_texture(tex_id);
         let white = Color32::WHITE;
         mesh.vertices.extend_from_slice(&[
-            Vertex { pos: Pos2::new(0.0, 0.0), uv: Pos2::new(0.0, 0.0), color: white },
-            Vertex { pos: Pos2::new(4.0, 0.0), uv: Pos2::new(1.0, 0.0), color: white },
-            Vertex { pos: Pos2::new(4.0, 4.0), uv: Pos2::new(1.0, 1.0), color: white },
-            Vertex { pos: Pos2::new(0.0, 4.0), uv: Pos2::new(0.0, 1.0), color: white },
+            Vertex {
+                pos: Pos2::new(0.0, 0.0),
+                uv: Pos2::new(0.0, 0.0),
+                color: white,
+            },
+            Vertex {
+                pos: Pos2::new(4.0, 0.0),
+                uv: Pos2::new(1.0, 0.0),
+                color: white,
+            },
+            Vertex {
+                pos: Pos2::new(4.0, 4.0),
+                uv: Pos2::new(1.0, 1.0),
+                color: white,
+            },
+            Vertex {
+                pos: Pos2::new(0.0, 4.0),
+                uv: Pos2::new(0.0, 1.0),
+                color: white,
+            },
         ]);
         mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
         let prim = ClippedPrimitive {
@@ -580,7 +669,10 @@ mod tests {
 
         // Top-left (0, 0) sampled texel (0, 0) = blue; bottom-right (3, 3) sampled texel (1, 1) = green.
         assert_eq!(&rgba[0..4], &[0, 0, 255, 255]);
-        assert_eq!(&rgba[(3 * 4 + 3) * 4..(3 * 4 + 3) * 4 + 4], &[0, 255, 0, 255]);
+        assert_eq!(
+            &rgba[(3 * 4 + 3) * 4..(3 * 4 + 3) * 4 + 4],
+            &[0, 255, 0, 255]
+        );
 
         let mut free_delta = TexturesDelta::default();
         free_delta.free.insert(tex_id);

@@ -97,7 +97,8 @@ impl TrayController {
     }
 
     pub fn update_dock_mode(&self, notch_dock_mode: bool) {
-        self.dock_mode_item.set_text(dock_mode_label(notch_dock_mode));
+        self.dock_mode_item
+            .set_text(dock_mode_label(notch_dock_mode));
     }
 
     pub fn update_status(&self, status: &ListenerStatus, paused: bool) {

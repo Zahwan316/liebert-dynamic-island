@@ -110,11 +110,11 @@ Every `v*` GitHub Release contains:
 
 | Asset | Install |
 | :--- | :--- |
-| `Liebert_Dynamic_Island-0.1.7-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
+| `Liebert_Dynamic_Island-0.2.0-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
 | `liebert-dynamic-island-linux-x86_64.tar.gz` | `tar -xzf`, then run `./liebert-dynamic-island-linux-x86_64/liebert-dynamic-island`. Includes `LICENSE.md`, `README.md`, `.desktop` and icon. |
 | `liebert-dynamic-island-windows-x86_64-setup.exe` | NSIS installer (per-user install, Start Menu shortcuts + uninstaller). |
 | `liebert-dynamic-island-windows-x86_64.zip` | Portable `.exe` + license + README. |
-| `liebert-dynamic-island-aur-0.1.7.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
+| `liebert-dynamic-island-aur-0.2.0.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
 
 Arch Linux users can build from `packaging/aur/` with `makepkg -si` once the package is submitted to the AUR (`yay -S liebert-dynamic-island`). AUR submission itself needs a maintainer account and is **not** automated by CI.
 
@@ -142,7 +142,8 @@ Expected output on Windows:
 | `auto_hide_when_idle` | `bool` | `false` | Automatically hide the overlay after `auto_hide_delay_secs` |
 | `auto_hide_delay_secs` | `u64` | `5` | Idle delay before auto-hiding (`0`–`60` seconds) |
 | `hide_in_fullscreen` | `bool` | `true` | Hide idle pill when a fullscreen or windowed-fullscreen app is active |
-| `idle_display` | `enum` | `Auto` | `Auto`, `Clock`, `Lyrics`, `NextEvent`, `Pomodoro`, or `Minimal` |
+| `idle_display` | `enum` | `Auto` | `Auto`, `Clock`, `Lyrics`, `NextEvent`, `Pomodoro`, `Mascot`, or `Minimal` |
+| `show_idle_mascot` | `bool` | `true` | Show the cursor-tracking mascot face alongside the idle pill |
 | `clock_timezone` | `string` | `"Local"` | `"Local"` or any IANA timezone (e.g. `"Asia/Jakarta"`) |
 | `font_name` | `string` | `""` | Installed device font name (empty uses system default) |
 | `text_align` | `enum` | `Left` | Text alignment: `Left`, `Center`, or `Right` |
@@ -248,7 +249,8 @@ Missing or malformed fields in `config.toml` safely fall back to `Default` and c
 | `auto_hide_delay_secs`                               | `u64`     | `5`                                   | `0`–`60`                                                      | Delay before auto-hiding when idle                          |
 | `hide_in_fullscreen`                                 | `bool`    | `true`                                | `true` / `false`                                              | Hide idle pill when a fullscreen app or game is active      |
 | `hide_in_windowed_fullscreen`                        | `bool`    | `true`                                | `true` / `false`                                              | Also hide on windowed-fullscreen / maximized apps           |
-| `idle_display`                                       | `enum`    | `Auto`                                | `Auto`, `Clock`, `Lyrics`, `NextEvent`, `Pomodoro`, `Minimal` | Content displayed in idle pill                              |
+| `idle_display`                                       | `enum`    | `Auto`                                | `Auto`, `Clock`, `Lyrics`, `NextEvent`, `Pomodoro`, `Mascot`, `Minimal` | Content displayed in idle pill                              |
+| `show_idle_mascot`                                   | `bool`    | `true`                                | `true` / `false`                                              | Show cursor-tracking mascot face in idle pill               |
 | `clock_timezone`                                     | `string`  | `"Local"`                             | `"Local"` or IANA TZ                                          | Timezone for clock display (e.g. `"Asia/Jakarta"`)          |
 | `clock_24h` / `clock_show_seconds`                   | `bool`    | `true` / `false`                      | `true` / `false`                                              | 24-hour clock format and seconds visibility                 |
 | `bg_color`                                           | `[u8; 4]` | `[16, 16, 20, 240]`                   | RGBA `0`–`255`                                                | Background color and opacity                                |
@@ -303,8 +305,27 @@ cargo clippy --all-targets -- -D warnings  # Run Clippy with warnings treated as
 cargo build --release                      # Build stripped LTO release binary
 ./scripts/build-linux-release.sh           # Linux tar.gz + AppImage in dist/
 # Windows (with NSIS installed, from repo root):
-#   makensis /DAPP_VERSION=0.1.7 installer\windows\installer.nsi
+#   makensis /DAPP_VERSION=0.2.0 installer\windows\installer.nsi
 ```
+
+Pada host Linux, installer Windows yang sama dapat dibangun tanpa mesin Windows memakai Docker (cross-compile GNU + `makensis`):
+
+```sh
+docker run --rm -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/work -w /work rust:slim bash -c '
+  apt-get update -qq && apt-get install -y -qq nsis gcc-mingw-w64-x86-64 >/dev/null 2>&1
+  export PATH=/usr/local/cargo/bin:$PATH
+  rustup target add x86_64-pc-windows-gnu >/dev/null
+  cargo build --release --locked --target x86_64-pc-windows-gnu
+  mkdir -p dist/staging-win
+  cp target/x86_64-pc-windows-gnu/release/liebert-dynamic-island.exe dist/staging-win/
+  cp LICENSE.md README.md dist/staging-win/
+  makensis -DAPP_VERSION=0.2.0 -DSTAGING_DIR=/work/dist/staging-win \
+    -DOUT_FILE=/work/dist/liebert-dynamic-island-windows-x86_64-setup.exe \
+    installer/windows/installer.nsi
+'
+```
+
+Hasilnya: `dist/liebert-dynamic-island-windows-x86_64-setup.exe` (per-user NSIS installer).
 
 ---
 
@@ -313,4 +334,4 @@ cargo build --release                      # Build stripped LTO release binary
 - **Windows notifications do not appear:** Run `cargo run -- --spike-notifications`. If `Access: Denied`, enable notification access in **Windows Settings → Privacy & security → Notifications**.
 - **Accent color in Settings appears unchanged while music plays:** Disable **Dynamic accent & glow from album art** in Settings (`Music & Lyrics`), as album art accent overrides the manual accent color while a track is active.
 - **Lyrics out of sync:** Adjust **Lyric sync offset (ms)** (`-5000` to `+5000 ms`) under **Music & Lyrics** in Settings.
-- **Linux notification listener fails to start:** Another `org.freedesktop.Notifications` daemon (`dunst`, `mako`, desktop shell) is already claiming the session D-Bus name. Stop the existing daemon before launching.
+- **Linux notifications do not appear:** Run `cargo run -- --spike-notifications`. If another daemon (`dunst`, `mako`, quickshell, desktop shell) owns `org.freedesktop.Notifications`, the app automatically switches to passive D-Bus monitor mode and still receives notifications — no need to stop the existing daemon. If the spike reports that both the direct listener and monitor are unavailable, check that `DBUS_SESSION_BUS_ADDRESS` is set in the session that launches the app.

@@ -8,10 +8,12 @@ use serde::{Deserialize, Serialize};
 pub enum IdleDisplayMode {
     #[default]
     Auto,
+    Mascot,
     Clock,
     Lyrics,
     NextEvent,
     Pomodoro,
+    Battery,
     Minimal,
 }
 
@@ -19,10 +21,12 @@ impl IdleDisplayMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::Auto => "Auto (Lyrics -> Clock)",
+            Self::Mascot => "Mascot (Eye Tracking)",
             Self::Clock => "Clock",
             Self::Lyrics => "Lyrics / Now Playing",
             Self::NextEvent => "Next Calendar Event",
             Self::Pomodoro => "Pomodoro Timer",
+            Self::Battery => "Battery",
             Self::Minimal => "Minimal Dot",
         }
     }
@@ -60,6 +64,28 @@ impl TextAlign {
             Self::Left => "Left",
             Self::Center => "Center",
             Self::Right => "Right",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum BackgroundMaterial {
+    #[default]
+    Solid,
+    Acrylic,
+    FrostedGlass,
+    LiquidGlass,
+    Glassmorphism,
+}
+
+impl BackgroundMaterial {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Solid => "Solid",
+            Self::Acrylic => "Acrylic",
+            Self::FrostedGlass => "Frosted Glass",
+            Self::LiquidGlass => "Liquid Glass",
+            Self::Glassmorphism => "Glassmorphism",
         }
     }
 }
@@ -114,10 +140,12 @@ pub struct Config {
     pub hide_in_fullscreen: bool,
     pub hide_in_windowed_fullscreen: bool,
     pub idle_display: IdleDisplayMode,
+    pub show_idle_mascot: bool,
     pub clock_timezone: String,
     pub clock_24h: bool,
     pub clock_show_seconds: bool,
     pub bg_color: [u8; 4],
+    pub background_material: BackgroundMaterial,
     pub accent_color: [u8; 3],
     pub text_color: [u8; 3],
     pub border_alpha: u8,
@@ -138,6 +166,8 @@ pub struct Config {
     pub show_todo: bool,
     pub show_calendar: bool,
     pub show_pomodoro: bool,
+    pub show_battery: bool,
+    pub start_with_os: bool,
     pub pomodoro_focus_mins: u64,
     pub pomodoro_short_break_mins: u64,
     pub pomodoro_long_break_mins: u64,
@@ -170,10 +200,12 @@ impl Default for Config {
             hide_in_fullscreen: true,
             hide_in_windowed_fullscreen: true,
             idle_display: IdleDisplayMode::Auto,
+            show_idle_mascot: true,
             clock_timezone: "Local".to_owned(),
             clock_24h: true,
             clock_show_seconds: false,
             bg_color: [16, 16, 20, 240],
+            background_material: BackgroundMaterial::Solid,
             accent_color: [110, 195, 255],
             text_color: [245, 245, 248],
             border_alpha: 36,
@@ -194,6 +226,8 @@ impl Default for Config {
             show_todo: true,
             show_calendar: true,
             show_pomodoro: true,
+            show_battery: true,
+            start_with_os: false,
             pomodoro_focus_mins: 25,
             pomodoro_short_break_mins: 5,
             pomodoro_long_break_mins: 15,
@@ -245,7 +279,10 @@ impl Config {
         cfg.pomodoro_long_break_mins = cfg.pomodoro_long_break_mins.clamp(1, 90);
         cfg.taskbar_interval_ms = cfg.taskbar_interval_ms.clamp(500, 5000);
         cfg.battery_warn_pct = cfg.battery_warn_pct.clamp(5, 50);
-        cfg.battery_critical_pct = cfg.battery_critical_pct.clamp(3, 30).min(cfg.battery_warn_pct);
+        cfg.battery_critical_pct = cfg
+            .battery_critical_pct
+            .clamp(3, 30)
+            .min(cfg.battery_warn_pct);
         cfg
     }
 
@@ -312,11 +349,11 @@ mod tests {
         assert_eq!(cfg.auto_hide_delay_secs, 5);
         assert!(cfg.hide_in_fullscreen);
         assert_eq!(cfg.idle_display, IdleDisplayMode::Auto);
+        assert!(cfg.show_idle_mascot);
+        assert_eq!(cfg.background_material, BackgroundMaterial::Solid);
         assert_eq!(cfg.clock_timezone, "Local");
         assert!(cfg.show_notifications && cfg.show_lyrics && cfg.show_todo && cfg.show_calendar);
-        assert!(
-            cfg.dynamic_album_color && cfg.compact_album_gradient && cfg.show_pill_translation
-        );
+        assert!(cfg.dynamic_album_color && cfg.compact_album_gradient && cfg.show_pill_translation);
         assert!(cfg.karaoke_lyrics && cfg.romaji_lyrics && cfg.translate_lyrics);
         assert_eq!(cfg.karaoke_lyric_mode, KaraokeLyricMode::Original);
         assert_eq!(cfg.text_align, TextAlign::Left);
@@ -341,7 +378,9 @@ mod tests {
             translate_lyrics: true,
             lyric_translate_lang: "en".to_owned(),
             lyric_offset_ms: -450,
-            idle_display: IdleDisplayMode::Clock,
+            idle_display: IdleDisplayMode::Mascot,
+            show_idle_mascot: false,
+            background_material: BackgroundMaterial::Glassmorphism,
             clock_timezone: "Asia/Jakarta".to_owned(),
             clock_24h: false,
             clock_show_seconds: true,
@@ -360,12 +399,15 @@ mod tests {
 
     #[test]
     fn legacy_partial_toml_loads_with_new_defaults() {
-        let legacy = "auto_hide_when_idle = true\ntop_offset_px = 18.0\ncollapse_timeout_secs = 7\n";
+        let legacy =
+            "auto_hide_when_idle = true\ntop_offset_px = 18.0\ncollapse_timeout_secs = 7\n";
         let parsed = Config::from_toml_str(legacy);
         assert!(parsed.auto_hide_when_idle);
         assert_eq!(parsed.top_offset_px, 18.0);
         assert_eq!(parsed.collapse_timeout_secs, 7);
         assert_eq!(parsed.scale, 1.0);
+        assert!(parsed.show_idle_mascot);
+        assert_eq!(parsed.background_material, BackgroundMaterial::Solid);
         assert_eq!(parsed.text_align, TextAlign::Left);
         assert_eq!(parsed.bg_color, Config::default().bg_color);
     }

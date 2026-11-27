@@ -3,7 +3,9 @@ use std::str::FromStr;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use chrono::{DateTime, Datelike, Days, Local, Months, NaiveDate, NaiveDateTime, TimeZone, Weekday};
+use chrono::{
+    DateTime, Datelike, Days, Local, Months, NaiveDate, NaiveDateTime, TimeZone, Weekday,
+};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use ureq::Agent;
@@ -113,8 +115,7 @@ pub fn parse_ics_in_range(ics: &str, min_ts: i64, max_ts: i64) -> Vec<CalendarEv
                     "RRULE" => rrule = Some(val.trim().to_owned()),
                     "EXDATE" => {
                         for item in val.split(',') {
-                            if let Some(ts) =
-                                parse_ics_datetime(item.trim(), line_tzid.as_deref())
+                            if let Some(ts) = parse_ics_datetime(item.trim(), line_tzid.as_deref())
                             {
                                 exdates.push(ts);
                             }
@@ -196,18 +197,27 @@ fn expand_rrule(
         .map(|dt| dt.with_timezone(&Local))
         .unwrap_or_else(Local::now);
     let base_date = parsed_tz
-        .and_then(|tz| DateTime::from_timestamp(ev.start_utc, 0).map(|d| d.with_timezone(&tz).date_naive()))
+        .and_then(|tz| {
+            DateTime::from_timestamp(ev.start_utc, 0).map(|d| d.with_timezone(&tz).date_naive())
+        })
         .unwrap_or_else(|| start_local_dt.date_naive());
     let base_time = parsed_tz
-        .and_then(|tz| DateTime::from_timestamp(ev.start_utc, 0).map(|d| d.with_timezone(&tz).time()))
+        .and_then(|tz| {
+            DateTime::from_timestamp(ev.start_utc, 0).map(|d| d.with_timezone(&tz).time())
+        })
         .unwrap_or_else(|| start_local_dt.time());
 
     let to_utc_ts = |date: NaiveDate| -> Option<i64> {
         let ndt = NaiveDateTime::new(date, base_time);
         if let Some(tz) = parsed_tz {
-            tz.from_local_datetime(&ndt).earliest().map(|d| d.timestamp())
+            tz.from_local_datetime(&ndt)
+                .earliest()
+                .map(|d| d.timestamp())
         } else {
-            Local.from_local_datetime(&ndt).earliest().map(|d| d.timestamp())
+            Local
+                .from_local_datetime(&ndt)
+                .earliest()
+                .map(|d| d.timestamp())
         }
     };
 
@@ -265,7 +275,8 @@ fn expand_rrule(
             if byday.is_empty() {
                 byday.push(base_date.weekday());
             }
-            let week_monday = base_date - Days::new(u64::from(base_date.weekday().num_days_from_monday()));
+            let week_monday =
+                base_date - Days::new(u64::from(base_date.weekday().num_days_from_monday()));
             let mut offsets: Vec<u64> = byday
                 .iter()
                 .map(|w| u64::from(w.num_days_from_monday()))
@@ -602,8 +613,7 @@ END:VCALENDAR\r\n";
         // Nov 19 is excluded by EXDATE; Nov 26 13:00 Asia/Jakarta must appear.
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].summary, "Sistem Basis Data");
-        let expected_nov26 =
-            parse_ics_datetime("20261126T130000", Some("Asia/Jakarta")).unwrap();
+        let expected_nov26 = parse_ics_datetime("20261126T130000", Some("Asia/Jakarta")).unwrap();
         assert_eq!(events[0].start_utc, expected_nov26);
     }
 }

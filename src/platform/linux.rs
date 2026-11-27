@@ -8,13 +8,17 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use zbus::{Connection, Dict, ObjectPath, OwnedVariant, Proxy, Variant, connection, interface};
+use futures_util::StreamExt;
+use zbus::{
+    Connection, Dict, MatchRule, ObjectPath, OwnedVariant, Proxy, Variant, connection, fdo,
+    interface,
+};
 
 use crate::platform::{
     AlbumArt, FontFamilyTarget, FontFileSpec, HoverPollInput, MediaCommand, MediaTrack,
     PlatformEvent, RepeatMode, decode_album_art,
 };
-use crate::state::{ListenerStatus, NotificationItem};
+use crate::state::{ListenerStatus, sanitized_notification_item};
 
 // shortcut: Non-Hyprland Wayland compositors lack wlr-layer-shell positioning in winit/eframe; upgrade to smithay-client-toolkit or iced_layershell for compositor-agnostic layer surfaces.
 
@@ -23,6 +27,7 @@ struct MonitorInfo {
     x: f32,
     y: f32,
     logical_width: f32,
+    logical_height: f32,
     scale: f32,
 }
 
@@ -32,6 +37,7 @@ struct LinuxOverlayCache {
     last_topmost_sync: Option<Instant>,
     last_hover_probe: Option<(Instant, bool)>,
     last_trigger_probe: Option<(Instant, bool)>,
+    last_cursor_probe: Option<(Instant, super::CursorScreenInfo)>,
 }
 
 fn overlay_cache() -> &'static Mutex<LinuxOverlayCache> {
@@ -43,6 +49,7 @@ fn overlay_cache() -> &'static Mutex<LinuxOverlayCache> {
             last_topmost_sync: None,
             last_hover_probe: None,
             last_trigger_probe: None,
+            last_cursor_probe: None,
         })
     })
 }
@@ -99,11 +106,13 @@ fn hypr_focused_monitor_cached() -> Option<MonitorInfo> {
     let x = mon.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let y = mon.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let width = mon.get("width").and_then(|v| v.as_f64()).unwrap_or(1920.0) as f32;
+    let height = mon.get("height").and_then(|v| v.as_f64()).unwrap_or(1080.0) as f32;
     let scale = (mon.get("scale").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32).max(0.5);
     let info = MonitorInfo {
         x,
         y,
         logical_width: width / scale,
+        logical_height: height / scale,
         scale,
     };
     if let Ok(mut guard) = overlay_cache().lock() {
@@ -118,6 +127,84 @@ fn hypr_cursor_pos() -> Option<(f32, f32)> {
     let x = xs.trim().parse::<f32>().ok()?;
     let y = ys.trim().parse::<f32>().ok()?;
     Some((x, y))
+}
+
+fn x11_cursor_screen_info(pixels_per_point: f32) -> Option<super::CursorScreenInfo> {
+    std::env::var_os("DISPLAY")?;
+    type X11State = Option<(x11rb::rust_connection::RustConnection, u32, f32, f32)>;
+    static X11_CONN: OnceLock<Mutex<X11State>> = OnceLock::new();
+    let cell = X11_CONN.get_or_init(|| {
+        use x11rb::connection::Connection as _;
+        let Ok((conn, screen_num)) = x11rb::connect(None) else {
+            return Mutex::new(None);
+        };
+        let (root, w_px, h_px) = {
+            let setup = conn.setup();
+            let Some(screen) = setup.roots.get(screen_num) else {
+                return Mutex::new(None);
+            };
+            (
+                screen.root,
+                f32::from(screen.width_in_pixels).max(1.0),
+                f32::from(screen.height_in_pixels).max(1.0),
+            )
+        };
+        Mutex::new(Some((conn, root, w_px, h_px)))
+    });
+    let Ok(mut guard) = cell.lock() else {
+        return None;
+    };
+    let (conn, root, w_px, h_px) = guard.as_mut()?;
+    use x11rb::protocol::xproto::ConnectionExt as _;
+    let Ok(cookie) = conn.query_pointer(*root) else {
+        *guard = None;
+        return None;
+    };
+    let Ok(reply) = cookie.reply() else {
+        *guard = None;
+        return None;
+    };
+    let ppp = pixels_per_point.max(1.0);
+    Some(super::CursorScreenInfo {
+        cursor_x: f32::from(reply.root_x) / ppp,
+        cursor_y: f32::from(reply.root_y) / ppp,
+        screen_x: 0.0,
+        screen_y: 0.0,
+        screen_w: *w_px / ppp,
+        screen_h: *h_px / ppp,
+    })
+}
+
+pub fn cursor_screen_info(pixels_per_point: f32) -> Option<super::CursorScreenInfo> {
+    if let Ok(guard) = overlay_cache().lock()
+        && let Some((at, info)) = guard.last_cursor_probe
+        && at.elapsed() < Duration::from_millis(24)
+    {
+        return Some(info);
+    }
+
+    let info =
+        if let (Some((cx, cy)), Some(mon)) = (hypr_cursor_pos(), hypr_focused_monitor_cached()) {
+            Some(super::CursorScreenInfo {
+                cursor_x: cx,
+                cursor_y: cy,
+                screen_x: mon.x,
+                screen_y: mon.y,
+                screen_w: mon.logical_width.max(1.0),
+                screen_h: mon.logical_height.max(1.0),
+            })
+        } else if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            x11_cursor_screen_info(pixels_per_point)
+        } else {
+            None
+        };
+
+    if let Some(info) = info
+        && let Ok(mut guard) = overlay_cache().lock()
+    {
+        guard.last_cursor_probe = Some((Instant::now(), info));
+    }
+    info
 }
 
 pub fn should_send_outer_position() -> bool {
@@ -168,8 +255,14 @@ fn hypr_client_flags(window_title: &str) -> Option<(bool, bool)> {
             || c.get("class").and_then(|v| v.as_str()) == Some("liebert-dynamic-island"))
             && c.get("mapped").and_then(|v| v.as_bool()) == Some(true)
     })?;
-    let floating = client.get("floating").and_then(|v| v.as_bool()).unwrap_or(false);
-    let pinned = client.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+    let floating = client
+        .get("floating")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let pinned = client
+        .get("pinned")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     Some((floating, pinned))
 }
 
@@ -193,7 +286,9 @@ fn dispatch_hypr_topmost(window_title: &str, check_legacy_flags: bool) {
             legacy_cmds.push(format!("/dispatch pin title:^({window_title})$"));
         }
     }
-    legacy_cmds.push(format!("/dispatch alterzorder top,title:^({window_title})$"));
+    legacy_cmds.push(format!(
+        "/dispatch alterzorder top,title:^({window_title})$"
+    ));
     let _ = hypr_ipc(&format!("[[BATCH]]{}", legacy_cmds.join(" ; ")));
 }
 
@@ -546,6 +641,326 @@ struct NotificationServer {
     on_wake: Arc<dyn Fn() + Send + Sync>,
 }
 
+/// IDs allocated by the passive D-Bus monitor (no `Notify` reply to hand out a cookie).
+static MONITOR_NEXT_ID: AtomicU32 = AtomicU32::new(1);
+
+/// `org.freedesktop.Notifications.Notify` arguments in D-Bus wire order.
+type NotifyArgs = (
+    String,
+    u32,
+    String,
+    String,
+    String,
+    Vec<String>,
+    HashMap<String, OwnedVariant>,
+    i32,
+);
+
+/// Extracts a compact 28x28 RGBA notification icon from D-Bus hints (`image-data`,
+/// `icon_data`, `image-path`) or desktop/theme icon lookups (cached by app/icon key).
+fn extract_linux_notification_icon<'a>(
+    app_name: &str,
+    app_icon: &str,
+    hints: impl IntoIterator<Item = (&'a str, &'a OwnedVariant)>,
+) -> Option<Vec<u8>> {
+    let mut image_data: Option<&OwnedVariant> = None;
+    let mut legacy_icon_data: Option<&OwnedVariant> = None;
+    let mut image_path: Option<String> = None;
+    let mut desktop_entry: Option<String> = None;
+
+    for (k, v) in hints {
+        match k {
+            "image-data" => image_data = Some(v),
+            "icon_data" => legacy_icon_data = Some(v),
+            "image-path" => image_path = variant_to_str(v),
+            "desktop-entry" => desktop_entry = variant_to_str(v),
+            _ => {}
+        }
+    }
+
+    if let Some(rgba) = image_data
+        .or(legacy_icon_data)
+        .and_then(decode_dbus_image_hint)
+    {
+        return Some(rgba);
+    }
+
+    if let Some(ref path) = image_path
+        && let Some(rgba) = load_linux_icon_source(path)
+    {
+        return Some(rgba);
+    }
+
+    let trimmed_icon = app_icon.trim();
+    if !trimmed_icon.is_empty()
+        && (trimmed_icon.contains('/') || trimmed_icon.starts_with("file:"))
+        && let Some(rgba) = load_linux_icon_source(trimmed_icon)
+    {
+        return Some(rgba);
+    }
+
+    let cache_key = format!(
+        "{}|{}|{}",
+        trimmed_icon.to_ascii_lowercase(),
+        desktop_entry.as_deref().unwrap_or("").to_ascii_lowercase(),
+        app_name.trim().to_ascii_lowercase()
+    );
+    type IconCacheEntry = (String, Option<Vec<u8>>);
+    static ICON_CACHE: OnceLock<Mutex<Vec<IconCacheEntry>>> = OnceLock::new();
+    let cache = ICON_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(guard) = cache.lock()
+        && let Some((_, cached)) = guard.iter().find(|(k, _)| k == &cache_key)
+    {
+        return cached.clone();
+    }
+
+    let mut candidates = Vec::new();
+    if !trimmed_icon.is_empty() {
+        candidates.push(trimmed_icon.to_owned());
+    }
+    if let Some(de) = desktop_entry.as_deref().filter(|s| !s.is_empty()) {
+        candidates.push(de.to_owned());
+        if let Some(icon_from_desktop) = lookup_desktop_icon_name(de) {
+            candidates.push(icon_from_desktop);
+        }
+    }
+    let app_lower = app_name.trim().to_ascii_lowercase().replace(' ', "-");
+    if !app_lower.is_empty() {
+        candidates.push(app_lower);
+    }
+
+    let mut found_rgba = None;
+    for cand in candidates {
+        if let Some(rgba) = find_theme_icon_rgba(&cand) {
+            found_rgba = Some(rgba);
+            break;
+        }
+    }
+
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= 32 {
+            guard.remove(0);
+        }
+        guard.push((cache_key, found_rgba.clone()));
+    }
+    found_rgba
+}
+
+fn unwrap_variant_ref<'a>(mut v: &'a Variant<'a>) -> &'a Variant<'a> {
+    while let Variant::Variant(inner) = v {
+        v = inner;
+    }
+    v
+}
+
+fn variant_as_i32(v: &Variant<'_>) -> Option<i32> {
+    match unwrap_variant_ref(v) {
+        Variant::I32(n) => Some(*n),
+        Variant::U32(n) => i32::try_from(*n).ok(),
+        Variant::U8(n) => Some(i32::from(*n)),
+        Variant::I16(n) => Some(i32::from(*n)),
+        Variant::U16(n) => Some(i32::from(*n)),
+        _ => None,
+    }
+}
+
+fn decode_dbus_image_hint(v: &OwnedVariant) -> Option<Vec<u8>> {
+    let Variant::Structure(s) = unwrap_variant_ref(v) else {
+        return None;
+    };
+    let fields = s.fields();
+    if fields.len() < 7 {
+        return None;
+    }
+    let width = variant_as_i32(&fields[0])?;
+    let height = variant_as_i32(&fields[1])?;
+    let rowstride = variant_as_i32(&fields[2])?;
+    let has_alpha = match unwrap_variant_ref(&fields[3]) {
+        Variant::Bool(b) => *b,
+        _ => return None,
+    };
+    let bps = variant_as_i32(&fields[4])?;
+    let channels = variant_as_i32(&fields[5])?;
+    let Variant::Array(arr) = unwrap_variant_ref(&fields[6]) else {
+        return None;
+    };
+    if arr.len() > 8 * 1024 * 1024 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(arr.len());
+    for elem in arr.iter() {
+        let Variant::U8(b) = elem else {
+            return None;
+        };
+        bytes.push(*b);
+    }
+    super::decode_raw_notification_image(width, height, rowstride, has_alpha, bps, channels, &bytes)
+}
+
+fn load_linux_icon_source(src: &str) -> Option<Vec<u8>> {
+    let path = decode_file_uri(src)?;
+    let meta = std::fs::metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > 2 * 1024 * 1024 {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    super::decode_notification_icon_bytes(&bytes)
+}
+
+fn lookup_desktop_icon_name(desktop_id: &str) -> Option<String> {
+    let file_name = if desktop_id.ends_with(".desktop") {
+        desktop_id.to_owned()
+    } else {
+        format!("{desktop_id}.desktop")
+    };
+    let mut roots = vec![PathBuf::from("/usr/share/applications")];
+    if let Ok(home) = std::env::var("HOME") {
+        roots.push(PathBuf::from(home).join(".local/share/applications"));
+    }
+    for dir in roots {
+        let path = dir.join(&file_name);
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            for line in raw.lines() {
+                if let Some(val) = line.strip_prefix("Icon=") {
+                    let trimmed = val.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn find_theme_icon_rgba(name: &str) -> Option<Vec<u8>> {
+    let clean = name.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    if clean.contains('/') || clean.starts_with("file:") {
+        return load_linux_icon_source(clean);
+    }
+    let mut bases = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        bases.push(PathBuf::from(home).join(".local/share/icons/hicolor"));
+    }
+    bases.push(PathBuf::from("/usr/share/icons/hicolor"));
+
+    let exts = ["png", "webp", "jpg", "jpeg"];
+    let sizes = ["48x48", "64x64", "32x32", "128x128", "256x256"];
+    for base in &bases {
+        for sz in &sizes {
+            for ext in &exts {
+                let p = base.join(sz).join("apps").join(format!("{clean}.{ext}"));
+                if p.is_file()
+                    && let Ok(bytes) = std::fs::read(&p)
+                    && let Some(rgba) = super::decode_notification_icon_bytes(&bytes)
+                {
+                    return Some(rgba);
+                }
+            }
+        }
+    }
+    for ext in &exts {
+        let p = PathBuf::from("/usr/share/pixmaps").join(format!("{clean}.{ext}"));
+        if p.is_file()
+            && let Ok(bytes) = std::fs::read(&p)
+            && let Some(rgba) = super::decode_notification_icon_bytes(&bytes)
+        {
+            return Some(rgba);
+        }
+    }
+    None
+}
+
+/// Decode a monitored D-Bus message into the same `PlatformEvent`s emitted by our server.
+/// Used when another notification daemon owns `org.freedesktop.Notifications`.
+fn decode_monitored_message(msg: &zbus::Message) -> Option<Vec<PlatformEvent>> {
+    let header = msg.header();
+    if header.interface().map(|v| v.as_str()) != Some("org.freedesktop.Notifications") {
+        return None;
+    }
+    match header.member().map(|v| v.as_str()) {
+        Some("Notify") => {
+            let (app_name, replaces_id, icon, summary, body, _actions, hints, _expire): NotifyArgs =
+                msg.body().deserialize().ok()?;
+            let id = if replaces_id != 0 {
+                replaces_id
+            } else {
+                MONITOR_NEXT_ID.fetch_add(1, Ordering::Relaxed)
+            };
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let icon_rgba = extract_linux_notification_icon(
+                &app_name,
+                &icon,
+                hints.iter().map(|(k, v)| (k.as_str(), v)),
+            );
+            Some(vec![PlatformEvent::Notification(
+                sanitized_notification_item(
+                    id.to_string(),
+                    &app_name,
+                    "Linux",
+                    &summary,
+                    &body,
+                    icon_rgba,
+                    timestamp,
+                ),
+            )])
+        }
+        Some("CloseNotification") => {
+            let (id,): (u32,) = msg.body().deserialize().ok()?;
+            Some(vec![PlatformEvent::Removed(id.to_string())])
+        }
+        _ => None,
+    }
+}
+
+/// Passive fallback: become a D-Bus monitor and observe Notify calls sent to the incumbent
+/// notification daemon. This is required on desktops where GNOME/KDE/quickshell/dunst already
+/// owns `org.freedesktop.Notifications` and cannot be replaced.
+fn monitor_notifications(
+    tx: mpsc::Sender<PlatformEvent>,
+    on_wake: Arc<dyn Fn() + Send + Sync>,
+) -> Result<(), String> {
+    zbus::block_on(async {
+        let conn = Connection::session()
+            .await
+            .map_err(|e| format!("D-Bus session connection failed: {e}"))?;
+        let rules = [
+            MatchRule::try_from(
+                "type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
+            )
+            .map_err(|e| format!("Invalid Notify match rule: {e}"))?,
+            MatchRule::try_from(
+                "type='method_call',interface='org.freedesktop.Notifications',member='CloseNotification'",
+            )
+            .map_err(|e| format!("Invalid CloseNotification match rule: {e}"))?,
+        ];
+        let proxy = fdo::MonitoringProxy::new(&conn)
+            .await
+            .map_err(|e| format!("MonitoringProxy failed: {e}"))?;
+        proxy
+            .become_monitor(&rules, 0)
+            .await
+            .map_err(|e| format!("BecomeMonitor denied: {e}"))?;
+
+        let mut stream = zbus::MessageStream::from(&conn);
+        while let Some(Ok(msg)) = stream.next().await {
+            if let Some(events) = decode_monitored_message(&msg) {
+                for event in events {
+                    let _ = tx.send(event);
+                }
+                on_wake();
+            }
+        }
+        Ok(())
+    })
+}
+
 #[interface(name = "org.freedesktop.Notifications")]
 impl NotificationServer {
     #[allow(clippy::too_many_arguments)]
@@ -553,11 +968,11 @@ impl NotificationServer {
         &self,
         app_name: &str,
         replaces_id: u32,
-        _app_icon: &str,
+        app_icon: &str,
         summary: &str,
         body: &str,
         _actions: Vec<&str>,
-        _hints: HashMap<&str, zbus::OwnedVariant>,
+        hints: HashMap<&str, zbus::OwnedVariant>,
         _expire_timeout: i32,
     ) -> u32 {
         let id = if replaces_id != 0 {
@@ -569,19 +984,18 @@ impl NotificationServer {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        let icon_rgba =
+            extract_linux_notification_icon(app_name, app_icon, hints.iter().map(|(&k, v)| (k, v)));
 
-        let item = NotificationItem {
-            id: id.to_string(),
-            app_name: if app_name.is_empty() {
-                "Linux".to_owned()
-            } else {
-                app_name.to_owned()
-            },
-            title: summary.trim().to_owned(),
-            body: body.trim().to_owned(),
-            icon_rgba: None,
+        let item = sanitized_notification_item(
+            id.to_string(),
+            app_name,
+            "Linux",
+            summary,
+            body,
+            icon_rgba,
             timestamp,
-        };
+        );
         let _ = self.tx.send(PlatformEvent::Notification(item));
         (self.on_wake)();
         id
@@ -597,7 +1011,7 @@ impl NotificationServer {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("liebert-dynamic-island", "Liebert", "0.1.7", "1.2")
+        ("liebert-dynamic-island", "Liebert", "0.2.0", "1.2")
     }
 }
 
@@ -610,16 +1024,23 @@ pub fn run_notification_spike() -> Result<String, String> {
         let proxy = zbus::fdo::DBusProxy::new(&conn)
             .await
             .map_err(|e| format!("DBusProxy failed: {e}"))?;
-        let name = "org.freedesktop.Notifications"
+        let name: zbus::names::BusName<'_> = "org.freedesktop.Notifications"
             .try_into()
             .map_err(|e| format!("Invalid bus name: {e}"))?;
         let has_owner = proxy
-            .name_has_owner(name)
+            .name_has_owner(name.clone())
             .await
             .map_err(|e| format!("name_has_owner failed: {e}"))?;
 
         if has_owner {
-            Ok("D-Bus session OK; org.freedesktop.Notifications currently owned by another daemon (stop dunst/mako to bind directly)".to_owned())
+            let owner = proxy
+                .get_name_owner(name)
+                .await
+                .map(|owner| owner.as_str().to_owned())
+                .unwrap_or_else(|_| "unknown".to_owned());
+            Ok(format!(
+                "D-Bus session OK; org.freedesktop.Notifications owned by {owner} — the listener will use passive monitor mode"
+            ))
         } else {
             Ok("D-Bus session OK; org.freedesktop.Notifications is free to claim".to_owned())
         }
@@ -636,8 +1057,8 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
                 on_wake: on_wake.clone(),
             };
 
-            let async_tx = tx.clone();
-            let async_on_wake = on_wake.clone();
+            let direct_tx = tx.clone();
+            let direct_on_wake = on_wake.clone();
             let res = zbus::block_on(async move {
                 let _conn = connection::Builder::session()
                     .name("org.freedesktop.Notifications")
@@ -645,17 +1066,27 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
                     .build()
                     .await?;
 
-                let _ = async_tx.send(PlatformEvent::Status(ListenerStatus::Listening));
-                async_on_wake();
+                let _ = direct_tx.send(PlatformEvent::Status(ListenerStatus::Listening));
+                direct_on_wake();
                 pending::<()>().await;
                 Ok::<(), zbus::Error>(())
             });
 
             if let Err(err) = res {
-                let _ = tx.send(PlatformEvent::Status(ListenerStatus::Error(format!(
-                    "D-Bus daemon error (another notification daemon active?): {err}"
-                ))));
-                on_wake();
+                // Another daemon owns the well-known name. Fall back to passive monitoring so
+                // notifications still reach the island without killing the user's daemon.
+                match monitor_notifications(tx.clone(), on_wake.clone()) {
+                    Ok(()) => {
+                        let _ = tx.send(PlatformEvent::Status(ListenerStatus::Listening));
+                        on_wake();
+                    }
+                    Err(monitor_err) => {
+                        let _ = tx.send(PlatformEvent::Status(ListenerStatus::Error(format!(
+                            "Notification listener unavailable (daemon: {err}; monitor: {monitor_err})"
+                        ))));
+                        on_wake();
+                    }
+                }
             }
         })
         .expect("spawn linux notification thread");
@@ -714,12 +1145,9 @@ pub fn spawn_media_listener(
                         }
                     }
 
-                    let chosen_bus = pick_active_mpris_bus(
-                        &mpris_names,
-                        &props_proxies,
-                        active_bus.as_deref(),
-                    )
-                    .await;
+                    let chosen_bus =
+                        pick_active_mpris_bus(&mpris_names, &props_proxies, active_bus.as_deref())
+                            .await;
                     active_bus = chosen_bus.clone();
 
                     let sample = if let Some(ref bus) = chosen_bus
@@ -816,26 +1244,33 @@ pub fn spawn_media_listener(
                                         .await
                                         {
                                             let target_us = (target_ms as i64).saturating_mul(1000);
-                                            let set_pos_ok = if let Some(ref raw_id) = active_track_id
-                                                && let Ok(obj_path) = ObjectPath::try_from(raw_id.as_str())
+                                            let set_pos_ok = if let Some(ref raw_id) =
+                                                active_track_id
+                                                && let Ok(obj_path) =
+                                                    ObjectPath::try_from(raw_id.as_str())
                                             {
                                                 player
-                                                    .call::<_, _, ()>("SetPosition", &(obj_path, target_us))
+                                                    .call::<_, _, ()>(
+                                                        "SetPosition",
+                                                        &(obj_path, target_us),
+                                                    )
                                                     .await
                                                     .is_ok()
                                             } else {
                                                 false
                                             };
                                             if !set_pos_ok {
-                                                let live_pos_ms = if let Some(props) = props_proxies.get(bus) {
-                                                    read_live_position_us(props)
-                                                        .await
-                                                        .map(|us| (us / 1000).max(0) as u64)
-                                                        .unwrap_or(cur_pos_ms)
-                                                } else {
-                                                    cur_pos_ms
-                                                };
-                                                let delta_us = (target_ms as i64 - live_pos_ms as i64)
+                                                let live_pos_ms =
+                                                    if let Some(props) = props_proxies.get(bus) {
+                                                        read_live_position_us(props)
+                                                            .await
+                                                            .map(|us| (us / 1000).max(0) as u64)
+                                                            .unwrap_or(cur_pos_ms)
+                                                    } else {
+                                                        cur_pos_ms
+                                                    };
+                                                let delta_us = (target_ms as i64
+                                                    - live_pos_ms as i64)
                                                     .saturating_mul(1000);
                                                 let _: Result<(), _> =
                                                     player.call("Seek", &(delta_us,)).await;
@@ -940,21 +1375,25 @@ fn evaluate_mpris_sync(
     }
 
     let elapsed_ms = now.saturating_duration_since(st.updated_at).as_millis() as f64;
-    let expected_ms = st.position_ms.saturating_add((elapsed_ms * st.rate).round() as u64);
+    let expected_ms = st
+        .position_ms
+        .saturating_add((elapsed_ms * st.rate).round() as u64);
     let actual_ms = track.position_ms;
     let diff = actual_ms.abs_diff(expected_ms);
 
     let forward_seek = actual_ms > expected_ms.saturating_add(300);
     let rewind_or_restart = actual_ms.saturating_add(900) < expected_ms
         || actual_ms < st.position_ms.saturating_sub(250);
-    let persistent_lag = if expected_ms.saturating_sub(actual_ms) >= 250 {
+    let persistent_lag = if expected_ms.saturating_sub(actual_ms) >= 350 {
         st.lag_count = st.lag_count.saturating_add(1);
         st.lag_count >= 2
     } else {
         st.lag_count = 0;
         false
     };
+    // Only snap forward on periodic lock; pulling backward on small jitter causes karaoke flicker.
     let periodic_lock = now.saturating_duration_since(st.emitted_at) >= Duration::from_millis(2500)
+        && actual_ms >= expected_ms
         && diff >= 80;
 
     if forward_seek || rewind_or_restart || persistent_lag || periodic_lock {
@@ -1041,7 +1480,10 @@ async fn pick_active_mpris_bus(
             sticky,
             is_playerctld,
         );
-        if best.as_ref().is_none_or(|(best_score, _)| score > *best_score) {
+        if best
+            .as_ref()
+            .is_none_or(|(best_score, _)| score > *best_score)
+        {
             best = Some((score, bus));
         }
     }
@@ -1185,7 +1627,8 @@ async fn read_mpris_sample(
             .and_then(|url| load_art_from_url(art_agent, url));
         ArtCacheState::record(cached_art, key, art_url, art.clone(), Instant::now());
         // Re-sample Position if album art fetch spent network/disk time so timeline stays locked.
-        if is_playing && fetch_started.elapsed() > Duration::from_millis(40)
+        if is_playing
+            && fetch_started.elapsed() > Duration::from_millis(40)
             && let Some(fresh_us) = read_live_position_us(props).await
         {
             sampled_at = Instant::now();
@@ -1291,11 +1734,7 @@ fn variant_to_string_list(v: &Variant<'_>) -> Vec<String> {
                 vec![trimmed.to_owned()]
             }
         }
-        Variant::Array(arr) => arr
-            .inner()
-            .iter()
-            .filter_map(variant_to_str)
-            .collect(),
+        Variant::Array(arr) => arr.inner().iter().filter_map(variant_to_str).collect(),
         _ => Vec::new(),
     }
 }
@@ -1454,9 +1893,12 @@ fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
                 .get(&candidate)
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.7",
+                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.2.0",
                 )
-                .header("Accept", "image/webp,image/png,image/jpeg,image/*,*/*;q=0.8")
+                .header(
+                    "Accept",
+                    "image/webp,image/png,image/jpeg,image/*,*/*;q=0.8",
+                )
                 .call()
                 && let Ok(bytes) = resp
                     .body_mut()
@@ -1483,20 +1925,99 @@ pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
     super::collect_fonts_from_dirs(&dirs)
 }
 
+/// Escape a path for the Desktop Entry `Exec` value, then quote it as one argument.
+fn escape_desktop_exec(path: &Path) -> String {
+    let escaped = path
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('$', "\\$")
+        .replace('`', "\\`");
+    format!("\"{escaped}\"")
+}
+
+/// Per-user XDG autostart entry. AppImage points `APPIMAGE` at the persistent file, so prefer it
+/// over `current_exe()` (which resolves to the temporary AppDir mount).
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    let config_root = directories::BaseDirs::new()
+        .map(|dirs| dirs.config_dir().to_path_buf())
+        .ok_or_else(|| "Cannot resolve XDG config directory".to_owned())?;
+    let dir = config_root.join("autostart");
+    let file = dir.join("liebert-dynamic-island.desktop");
+
+    if !enabled {
+        match std::fs::remove_file(&file) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+
+    let exe = std::env::var_os("APPIMAGE")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok())
+        .ok_or_else(|| "Cannot resolve executable path".to_owned())?;
+    let entry = super::desktop_autostart_entry(&escape_desktop_exec(&exe));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(&file, entry).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn monitored_notify_message_decodes_into_notification() {
+        let body: NotifyArgs = (
+            "WhatsApp Web".to_owned(),
+            0,
+            String::new(),
+            "<b>Title</b> &amp; Alert".to_owned(),
+            "<a href=\"https://web.whatsapp.com\">Link</a><br>Hello".to_owned(),
+            Vec::new(),
+            HashMap::new(),
+            -1,
+        );
+        let msg = zbus::Message::method_call("/", "Notify")
+            .interface("org.freedesktop.Notifications")
+            .build(&body)
+            .expect("monitored Notify message");
+        let events = decode_monitored_message(&msg).expect("decoded events");
+        match events.as_slice() {
+            [PlatformEvent::Notification(item)] => {
+                assert_eq!(item.app_name, "WhatsApp Web");
+                assert_eq!(item.title, "Title & Alert");
+                assert_eq!(item.body, "Link Hello");
+                assert!(item.id.parse::<u32>().is_ok());
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn desktop_exec_escapes_shell_metacharacters() {
+        let exec = escape_desktop_exec(Path::new("/tmp/My $Apps/liebert\""));
+        assert_eq!(exec, "\"/tmp/My \\$Apps/liebert\\\"\"");
+    }
+
+    #[test]
     fn base_and_cjk_font_discovery_finds_existing_files() {
         let base = base_fallback_fonts();
         for spec in &base {
-            assert!(Path::new(&spec.path).is_file(), "missing font {}", spec.path);
+            assert!(
+                Path::new(&spec.path).is_file(),
+                "missing font {}",
+                spec.path
+            );
             assert!(!spec.face_indices.is_empty());
         }
         let cjk = cjk_fallback_fonts_for(crate::platform::CjkScript::JapaneseOrHan);
         for spec in &cjk {
-            assert!(Path::new(&spec.path).is_file(), "missing cjk font {}", spec.path);
+            assert!(
+                Path::new(&spec.path).is_file(),
+                "missing cjk font {}",
+                spec.path
+            );
             assert!(!spec.face_indices.is_empty());
         }
     }
@@ -1539,7 +2060,8 @@ mod tests {
         // Several Linux players send a single string instead of a string array.
         dict.add("xesam:artist", Variant::new("YOASOBI")).unwrap();
         // Players such as Chromium/mpDris2 send mpris:length as uint64 (`t`).
-        dict.add("mpris:length", Variant::new(213_000_000u64)).unwrap();
+        dict.add("mpris:length", Variant::new(213_000_000u64))
+            .unwrap();
 
         let (title, artist, duration_ms, _, _) =
             extract_metadata_fields(&dict).expect("metadata extracted");
@@ -1636,7 +2158,9 @@ mod tests {
         let mut cache = None;
         // Delayed artUrl arrival on poll 2 invalidates the initial `None` slot cleanly.
         ArtCacheState::record(&mut cache, key.clone(), None, None, t0);
-        assert!(ArtCacheState::resolve(&mut cache, &key, Some("https://i.scdn.co/a"), t0).is_none());
+        assert!(
+            ArtCacheState::resolve(&mut cache, &key, Some("https://i.scdn.co/a"), t0).is_none()
+        );
         ArtCacheState::record(
             &mut cache,
             key.clone(),

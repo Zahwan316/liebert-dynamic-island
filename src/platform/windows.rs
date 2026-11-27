@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::Foundation::TypedEventHandler;
@@ -18,7 +18,9 @@ use windows::UI::Notifications::{
     KnownNotificationBindings, NotificationKinds, UserNotification,
     UserNotificationChangedEventArgs,
 };
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    ERROR_FILE_NOT_FOUND, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_EXTENDED_FRAME_BOUNDS,
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DwmGetWindowAttribute,
@@ -29,16 +31,19 @@ use windows::Win32::Graphics::Gdi::{
     MonitorFromWindow, ReleaseDC,
 };
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx};
+use windows::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegCreateKeyW, RegDeleteValueW,
+    RegOpenKeyExW, RegSetValueExW,
+};
 use windows::Win32::UI::Shell::{
-    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
-    SHQueryUserNotificationState,
+    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, DispatchMessageW, FindWindowExW, FindWindowW, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
     GWLP_WNDPROC, GetAncestor, GetClassNameW, GetCursorPos, GetDesktopWindow, GetForegroundWindow,
     GetShellWindow, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
     HWND_NOTOPMOST, HWND_TOPMOST, IsIconic, IsWindowVisible, IsZoomed, MONITORINFOF_PRIMARY, MSG,
-    PM_REMOVE, PeekMessageW, SM_CXSCREEN, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE,
+    PM_REMOVE, PeekMessageW, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_RESTORE, SW_SHOWNOACTIVATE,
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WM_NCCALCSIZE, WNDPROC,
     WS_BORDER, WS_CAPTION, WS_DLGFRAME, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
@@ -50,7 +55,9 @@ use crate::platform::{
     AlbumArt, FontFamilyTarget, FontFileSpec, HoverPollInput, MediaCommand, MediaTrack,
     PlatformEvent, RepeatMode, decode_album_art,
 };
-use crate::state::{ListenerStatus, NotificationItem};
+use crate::state::{
+    ListenerStatus, NotificationItem, is_brave_app, is_web_origin_line, sanitized_notification_item,
+};
 
 fn init_com_mta() {
     // Ignore RPC_E_CHANGED_MODE if COM is already initialized on this thread.
@@ -124,24 +131,73 @@ fn extract_notification_item(notif: &UserNotification) -> Option<NotificationIte
         }
     }
 
-    let title = lines
-        .first()
-        .cloned()
-        .unwrap_or_else(|| app_name.clone());
+    if is_brave_app(&app_name) && lines.len() > 1 {
+        let filtered: Vec<String> = lines
+            .iter()
+            .filter(|line| !is_web_origin_line(line))
+            .cloned()
+            .collect();
+        if !filtered.is_empty() {
+            lines = filtered;
+        }
+    }
+
+    let title = lines.first().map(String::as_str).unwrap_or("");
     let body = if lines.len() > 1 {
         lines[1..].join(" — ")
     } else {
         String::new()
     };
+    let icon_rgba = extract_win_app_icon(notif, &app_name);
 
-    Some(NotificationItem {
+    Some(sanitized_notification_item(
         id,
-        app_name,
+        &app_name,
+        "Windows",
         title,
-        body,
-        icon_rgba: None,
-        timestamp: unix_timestamp_secs(),
-    })
+        &body,
+        icon_rgba,
+        unix_timestamp_secs(),
+    ))
+}
+
+fn extract_win_app_icon(notif: &UserNotification, app_name: &str) -> Option<Vec<u8>> {
+    type WinIconCache = Vec<(String, Option<Vec<u8>>)>;
+    static WIN_ICON_CACHE: OnceLock<Mutex<WinIconCache>> = OnceLock::new();
+    let cache_key = app_name.trim().to_ascii_lowercase();
+    let cache = WIN_ICON_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(guard) = cache.lock()
+        && let Some((_, cached)) = guard.iter().find(|(k, _)| k == &cache_key)
+    {
+        return cached.clone();
+    }
+
+    let logo_ref = notif
+        .AppInfo()
+        .ok()
+        .and_then(|info| info.DisplayInfo().ok())
+        .and_then(|disp| {
+            disp.GetLogo(windows::Foundation::Size {
+                Width: 48.0,
+                Height: 48.0,
+            })
+            .ok()
+        });
+    let rgba = logo_ref
+        .and_then(|r| {
+            let iface: windows::Storage::Streams::IRandomAccessStreamReference =
+                windows::core::Interface::cast(&r).ok()?;
+            read_stream_ref_bytes(&iface, 2 * 1024 * 1024)
+        })
+        .and_then(|bytes| super::decode_notification_icon_bytes(&bytes));
+
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= 32 {
+            guard.remove(0);
+        }
+        guard.push((cache_key, rgba.clone()));
+    }
+    rgba
 }
 
 pub fn run_notification_spike() -> Result<String, String> {
@@ -199,9 +255,9 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
             let listener = match UserNotificationListener::Current() {
                 Ok(l) => l,
                 Err(e) => {
-                    let _ = tx.send(PlatformEvent::Status(ListenerStatus::AccessDenied(format!(
-                        "Listener unavailable: {e}"
-                    ))));
+                    let _ = tx.send(PlatformEvent::Status(ListenerStatus::AccessDenied(
+                        format!("Listener unavailable: {e}"),
+                    )));
                     on_wake();
                     return;
                 }
@@ -215,10 +271,12 @@ pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + S
             match access {
                 Ok(UserNotificationListenerAccessStatus::Allowed) => {}
                 Ok(other) => {
-                    let _ = tx.send(PlatformEvent::Status(ListenerStatus::AccessDenied(format!(
-                        "Access {} — enable Windows Notifications access",
-                        access_status_label(other)
-                    ))));
+                    let _ = tx.send(PlatformEvent::Status(ListenerStatus::AccessDenied(
+                        format!(
+                            "Access {} — enable Windows Notifications access",
+                            access_status_label(other)
+                        ),
+                    )));
                     on_wake();
                     return;
                 }
@@ -314,9 +372,8 @@ pub fn spawn_media_listener(
         .name("win-smtc-media".to_owned())
         .spawn(move || {
             init_com_mta();
-            let Ok(manager) =
-                GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
-                    .and_then(|op| op.join())
+            let Ok(manager) = GlobalSystemMediaTransportControlsSessionManager::RequestAsync()
+                .and_then(|op| op.join())
             else {
                 return;
             };
@@ -337,18 +394,19 @@ pub fn spawn_media_listener(
             let mut cached_art: CachedAlbumArt = None;
             loop {
                 let current = read_smtc_track(&manager, &mut cached_art);
-                let snapshot = current.as_ref().map(|(t, raw_pos_ms, last_updated_ticks)| {
-                    MediaSnapshot {
-                        title: t.title.clone(),
-                        artist: t.artist.clone(),
-                        is_playing: t.is_playing,
-                        raw_pos_ms: *raw_pos_ms,
-                        last_updated_ticks: *last_updated_ticks,
-                        duration_ms: t.duration_ms,
-                        shuffle: t.shuffle,
-                        repeat: t.repeat,
-                    }
-                });
+                let snapshot =
+                    current
+                        .as_ref()
+                        .map(|(t, raw_pos_ms, last_updated_ticks)| MediaSnapshot {
+                            title: t.title.clone(),
+                            artist: t.artist.clone(),
+                            is_playing: t.is_playing,
+                            raw_pos_ms: *raw_pos_ms,
+                            last_updated_ticks: *last_updated_ticks,
+                            duration_ms: t.duration_ms,
+                            shuffle: t.shuffle,
+                            repeat: t.repeat,
+                        });
                 if snapshot != last_snapshot {
                     last_snapshot = snapshot;
                     let _ = tx.send(PlatformEvent::Media(current.map(|(t, _, _)| t)));
@@ -504,13 +562,13 @@ fn read_smtc_track(
     ))
 }
 
-fn read_smtc_thumbnail(
-    props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
-) -> Option<Arc<AlbumArt>> {
-    let thumb_ref = props.Thumbnail().ok()?;
-    let stream = thumb_ref.OpenReadAsync().ok()?.join().ok()?;
+fn read_stream_ref_bytes(
+    stream_ref: &windows::Storage::Streams::IRandomAccessStreamReference,
+    max_bytes: usize,
+) -> Option<Vec<u8>> {
+    let stream = stream_ref.OpenReadAsync().ok()?.join().ok()?;
     let size = stream.Size().ok()? as usize;
-    if size == 0 || size > 4 * 1024 * 1024 {
+    if size == 0 || size > max_bytes {
         return None;
     }
     let reader = DataReader::CreateDataReader(&stream).ok()?;
@@ -520,6 +578,14 @@ fn read_smtc_thumbnail(
     }
     let mut buf = vec![0u8; loaded];
     reader.ReadBytes(&mut buf).ok()?;
+    Some(buf)
+}
+
+fn read_smtc_thumbnail(
+    props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
+) -> Option<Arc<AlbumArt>> {
+    let thumb_ref = props.Thumbnail().ok()?;
+    let buf = read_stream_ref_bytes(&thumb_ref, 4 * 1024 * 1024)?;
     decode_album_art(&buf)
 }
 
@@ -560,12 +626,23 @@ pub fn detect_overlay_hover(input: HoverPollInput<'_>) -> bool {
 }
 
 pub fn base_fallback_fonts() -> Vec<FontFileSpec> {
-    vec![FontFileSpec {
+    let mut specs = vec![FontFileSpec {
         name: "win_segoe_ui".to_owned(),
         path: "C:\\Windows\\Fonts\\segoeui.ttf".to_owned(),
-        family: FontFamilyTarget::Both,
+        family: FontFamilyTarget::Proportional,
         face_indices: &[0],
-    }]
+    }];
+    if std::path::Path::new("C:\\Windows\\Fonts\\consola.ttf").is_file() {
+        specs.push(FontFileSpec {
+            name: "win_consolas".to_owned(),
+            path: "C:\\Windows\\Fonts\\consola.ttf".to_owned(),
+            family: FontFamilyTarget::Monospace,
+            face_indices: &[0],
+        });
+    } else {
+        specs[0].family = FontFamilyTarget::Both;
+    }
+    specs
 }
 
 pub fn bold_fallback_fonts() -> Vec<FontFileSpec> {
@@ -640,13 +717,8 @@ pub fn apply_no_activate_hook(window_title: &str) {
     }
 
     if ORIG_WNDPROC.load(Ordering::Relaxed) == 0 {
-        let prev = unsafe {
-            SetWindowLongPtrW(
-                hwnd,
-                GWLP_WNDPROC,
-                overlay_wndproc as *const () as isize,
-            )
-        };
+        let prev =
+            unsafe { SetWindowLongPtrW(hwnd, GWLP_WNDPROC, overlay_wndproc as *const () as isize) };
         if prev != 0 {
             ORIG_WNDPROC.store(prev, Ordering::Relaxed);
         }
@@ -875,6 +947,25 @@ pub fn is_cursor_over_window(window_title: &str, padding_px: i32) -> Option<bool
     )
 }
 
+pub fn cursor_screen_info(pixels_per_point: f32) -> Option<crate::platform::CursorScreenInfo> {
+    let screen_w_px = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    let screen_h_px = unsafe { GetSystemMetrics(SM_CYSCREEN) };
+    if screen_w_px <= 0 || screen_h_px <= 0 {
+        return None;
+    }
+    let mut pt = POINT::default();
+    unsafe { GetCursorPos(&mut pt) }.ok()?;
+    let ppp = pixels_per_point.max(1.0);
+    Some(crate::platform::CursorScreenInfo {
+        cursor_x: pt.x as f32 / ppp,
+        cursor_y: pt.y as f32 / ppp,
+        screen_x: 0.0,
+        screen_y: 0.0,
+        screen_w: screen_w_px as f32 / ppp,
+        screen_h: screen_h_px as f32 / ppp,
+    })
+}
+
 pub fn is_cursor_in_top_trigger(
     top_offset_px: f32,
     trigger_width_px: f32,
@@ -1005,7 +1096,8 @@ pub fn detect_fullscreen_state() -> (bool, bool) {
 
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
     let has_caption = (style & WS_CAPTION.0) == WS_CAPTION.0;
-    let (exclusive, windowed) = classify_fullscreen_rects(win_rect, info.rcMonitor, info.rcWork, has_caption);
+    let (exclusive, windowed) =
+        classify_fullscreen_rects(win_rect, info.rcMonitor, info.rcWork, has_caption);
     (exclusive, windowed || is_zoomed)
 }
 
@@ -1044,6 +1136,52 @@ pub fn list_installed_fonts() -> Vec<super::InstalledFont> {
         );
     }
     super::collect_fonts_from_dirs(&dirs)
+}
+
+/// Per-user autostart via HKCU Run. No Administrator rights are needed.
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+    const VALUE_NAME: &str = "LiebertDynamicIsland";
+
+    let subkey = HSTRING::from(RUN_KEY);
+    let value_name = HSTRING::from(VALUE_NAME);
+    let mut hkey = HKEY::default();
+
+    if !enabled {
+        let status =
+            unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, &subkey, None, KEY_SET_VALUE, &mut hkey) };
+        if status == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        if status.0 != 0 {
+            return Err(format!("RegOpenKeyExW failed: {}", status.0));
+        }
+        let status = unsafe { RegDeleteValueW(hkey, &value_name) };
+        let _ = unsafe { RegCloseKey(hkey) };
+        if status != ERROR_FILE_NOT_FOUND && status.0 != 0 {
+            return Err(format!("RegDeleteValueW failed: {}", status.0));
+        }
+        return Ok(());
+    }
+
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let command = super::windows_autostart_command(&exe);
+    let mut units: Vec<u16> = command.encode_utf16().collect();
+    units.push(0);
+    let bytes: Vec<u8> = units.into_iter().flat_map(u16::to_le_bytes).collect();
+
+    // RegCreateKeyW opens the key when present and creates it otherwise; unlike RegCreateKeyExW
+    // it needs no SECURITY_ATTRIBUTES (and therefore no extra `Win32_Security` feature).
+    let status = unsafe { RegCreateKeyW(HKEY_CURRENT_USER, &subkey, &mut hkey) };
+    if status.0 != 0 {
+        return Err(format!("RegCreateKeyW failed: {}", status.0));
+    }
+    let status = unsafe { RegSetValueExW(hkey, &value_name, None, REG_SZ, Some(&bytes)) };
+    let _ = unsafe { RegCloseKey(hkey) };
+    if status.0 != 0 {
+        return Err(format!("RegSetValueExW failed: {}", status.0));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -29,9 +29,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     RegisterClassW, SM_CXSCREEN, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SetProcessDPIAware, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage,
     ULW_ALPHA, UpdateLayeredWindow, WHEEL_DELTA, WM_APP, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_QUIT, WM_HOTKEY, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    WM_HOTKEY, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR};
 
@@ -95,7 +95,9 @@ unsafe extern "system" fn layered_wnd_proc(
             WM_MOUSEMOVE => {
                 state
                     .pending_events
-                    .push(Event::PointerMoved(lparam_to_logical_pos(lparam, state.ppp)));
+                    .push(Event::PointerMoved(lparam_to_logical_pos(
+                        lparam, state.ppp,
+                    )));
                 state.needs_redraw = true;
                 return LRESULT(0);
             }
@@ -568,7 +570,7 @@ fn run_layered_loop(
     unsafe { ReleaseDC(None, screen_dc) };
 
     let egui_ctx = egui::Context::default();
-    ui::apply_configured_fonts(&egui_ctx, &initial_config.font_name);
+    ui::apply_configured_fonts_light(&egui_ctx, &initial_config.font_name);
     if let Some(snap) = initial_snapshot {
         app.apply_snapshot(snap, &egui_ctx);
     }
@@ -671,7 +673,10 @@ fn run_layered_loop(
                 if !screen_dc.is_invalid() {
                     if let Ok(pixels) = dib.ensure_size(screen_dc, 1, 1) {
                         pixels[..4].fill(0);
-                        let pt_dst = POINT { x: win_x_px, y: win_y_px };
+                        let pt_dst = POINT {
+                            x: win_x_px,
+                            y: win_y_px,
+                        };
                         let sz = SIZE { cx: 1, cy: 1 };
                         let pt_src = POINT { x: 0, y: 0 };
                         let blend = BLENDFUNCTION {
@@ -732,7 +737,11 @@ fn run_layered_loop(
                 || win_y_px != committed_y;
 
             if geometry_changed
-                || should_draw(wnd_state.needs_redraw, step.repaint_after, last_draw.elapsed())
+                || should_draw(
+                    wnd_state.needs_redraw,
+                    step.repaint_after,
+                    last_draw.elapsed(),
+                )
             {
                 last_draw = Instant::now();
                 let raw_input = RawInput {
@@ -740,6 +749,7 @@ fn run_layered_loop(
                         Pos2::ZERO,
                         Vec2::new(want_w_log, want_h_log),
                     )),
+                    max_texture_side: Some(1024),
                     time: Some(start_time.elapsed().as_secs_f64()),
                     events: std::mem::take(&mut wnd_state.pending_events),
                     ..Default::default()
@@ -870,7 +880,15 @@ struct TaskbarLayeredWindow {
     canvas: Option<SoftCanvas>,
     egui_ctx: Option<egui::Context>,
     last_metrics: Option<SystemMetrics>,
-    last_cfg_key: Option<(bool, bool, bool, bool, bool, crate::config::TaskbarFormat, crate::config::TaskbarPosition)>,
+    last_cfg_key: Option<(
+        bool,
+        bool,
+        bool,
+        bool,
+        bool,
+        crate::config::TaskbarFormat,
+        crate::config::TaskbarPosition,
+    )>,
     visible: bool,
 }
 
@@ -974,7 +992,7 @@ impl TaskbarLayeredWindow {
                 return;
             };
             let ctx = egui::Context::default();
-            ui::apply_configured_fonts(&ctx, &config.font_name);
+            ui::apply_configured_fonts_light(&ctx, &config.font_name);
             self.hwnd = Some(hwnd);
             self.dib = Some(dib);
             self.canvas = Some(SoftCanvas::new());
@@ -983,8 +1001,12 @@ impl TaskbarLayeredWindow {
 
         let Some(hwnd) = self.hwnd else { return };
         let Some(dib) = self.dib.as_mut() else { return };
-        let Some(canvas) = self.canvas.as_mut() else { return };
-        let Some(ctx) = self.egui_ctx.as_ref() else { return };
+        let Some(canvas) = self.canvas.as_mut() else {
+            return;
+        };
+        let Some(ctx) = self.egui_ctx.as_ref() else {
+            return;
+        };
 
         let logical_size = ui::taskbar::estimate_taskbar_size(config, metrics);
         let (x_px, y_px, w_px, h_px) =
@@ -995,6 +1017,7 @@ impl TaskbarLayeredWindow {
 
         let raw_input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, logical_size)),
+            max_texture_side: Some(1024),
             time: Some(start_time.elapsed().as_secs_f64()),
             ..Default::default()
         };

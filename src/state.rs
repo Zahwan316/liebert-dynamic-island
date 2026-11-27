@@ -16,6 +16,386 @@ pub struct NotificationItem {
     pub timestamp: u64,
 }
 
+/// Strips HTML/XML tags (including entity-escaped markup like `&lt;a href="..."&gt;`)
+/// and normalizes entities/whitespace from browser and Electron notifications
+/// while keeping math (`1 < 2`), hearts (`<3`), and email addresses intact.
+pub fn sanitize_notification_text(raw: &str) -> String {
+    let mut cur = raw.to_owned();
+    for _ in 0..2 {
+        let stripped = strip_html_tags(&cur);
+        let decoded = decode_html_entities(&stripped);
+        let cleaned = strip_html_tags(&decoded);
+        if cleaned == cur {
+            break;
+        }
+        cur = cleaned;
+    }
+    collapse_notification_whitespace(&cur)
+}
+
+/// Returns whether `app_name` identifies the Brave browser (desktop/snap/flatpak variants).
+pub fn is_brave_app(app_name: &str) -> bool {
+    let lower = app_name.trim().to_ascii_lowercase();
+    lower == "brave"
+        || lower.starts_with("brave ")
+        || lower.starts_with("brave-")
+        || lower.contains("brave browser")
+}
+
+/// Returns whether `text` represents a bare website origin/domain attribution line
+/// (such as `"web.whatsapp.com"`, `"via youtube.com"`, or `"https://discord.com"`).
+pub fn is_web_origin_line(text: &str) -> bool {
+    let mut s = text.trim();
+    if s.is_empty() {
+        return false;
+    }
+    let lower_orig = s.to_ascii_lowercase();
+    for prefix in ["via ", "from ", "source: "] {
+        if lower_orig.starts_with(prefix) {
+            s = s[prefix.len()..].trim();
+            break;
+        }
+    }
+    if let Some(rest) = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+    {
+        s = rest;
+    }
+    if let Some((host, _)) = s.split_once('/') {
+        s = host;
+    }
+    let host = s.split(':').next().unwrap_or(s).trim_end_matches('.');
+    if host.is_empty() || host.contains('@') || host.chars().any(char::is_whitespace) {
+        return false;
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() < 2 {
+        return false;
+    }
+    let all_labels_valid = parts.iter().all(|p| {
+        !p.is_empty()
+            && p.len() <= 63
+            && !p.starts_with('-')
+            && !p.ends_with('-')
+            && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    });
+    if !all_labels_valid {
+        return false;
+    }
+    let tld = parts.last().copied().unwrap_or("");
+    let has_alpha_host = parts
+        .iter()
+        .any(|p| p.chars().any(|c| c.is_ascii_alphabetic()));
+    has_alpha_host && tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+fn strip_brave_origin_from_text(input: &str) -> String {
+    let mut kept_lines = Vec::new();
+    for raw_line in input.lines() {
+        let mut line = raw_line.trim().to_owned();
+        if line.is_empty() || is_web_origin_line(&line) {
+            continue;
+        }
+        // Strip leading "<domain>: " / "<domain> - " / "<domain> " prefix emitted when Chromium
+        // wraps web origin before notification text.
+        if let Some((first_tok, rest)) = line.split_once(char::is_whitespace) {
+            let clean_tok = first_tok.trim_end_matches([':', '-', '—', '–', '·', '•', '|']);
+            if is_web_origin_line(clean_tok) {
+                let after = rest
+                    .trim_start_matches([':', '-', '—', '–', '·', '•', '|', ' '])
+                    .trim();
+                if !after.is_empty() {
+                    line = after.to_owned();
+                } else {
+                    continue;
+                }
+            }
+        }
+        // Strip trailing " — web.whatsapp.com", " (youtube.com)", etc.
+        for sep in [" — ", " – ", " - ", " · ", " • ", " | "] {
+            if let Some((head, tail)) = line.rsplit_once(sep)
+                && is_web_origin_line(tail)
+                && !head.trim().is_empty()
+            {
+                line = head.trim().to_owned();
+                break;
+            }
+        }
+        if let Some(open) = line.rfind(" (")
+            && line.ends_with(')')
+        {
+            let inside = &line[open + 2..line.len() - 1];
+            if is_web_origin_line(inside) && !line[..open].trim().is_empty() {
+                line = line[..open].trim().to_owned();
+            }
+        }
+        if !is_web_origin_line(&line) && !line.is_empty() {
+            kept_lines.push(line);
+        }
+    }
+    kept_lines.join(" ")
+}
+
+fn clean_notification_field(raw: &str, brave_mode: bool) -> String {
+    let mut cur = raw.to_owned();
+    for _ in 0..2 {
+        let stripped = strip_html_tags(&cur);
+        let decoded = decode_html_entities(&stripped);
+        let cleaned = strip_html_tags(&decoded);
+        if cleaned == cur {
+            break;
+        }
+        cur = cleaned;
+    }
+    if brave_mode {
+        cur = strip_brave_origin_from_text(&cur);
+    }
+    collapse_notification_whitespace(&cur)
+}
+
+/// Builds a [`NotificationItem`] with sanitized `app_name`, `title`, and `body`.
+pub fn sanitized_notification_item(
+    id: String,
+    app_name: &str,
+    default_app: &str,
+    title: &str,
+    body: &str,
+    icon_rgba: Option<Vec<u8>>,
+    timestamp: u64,
+) -> NotificationItem {
+    let clean_app = sanitize_notification_text(app_name);
+    let final_app = if clean_app.is_empty() {
+        default_app.to_owned()
+    } else {
+        clean_app
+    };
+    let brave = is_brave_app(&final_app);
+    let clean_title = clean_notification_field(title, brave);
+    let final_title = if clean_title.is_empty() {
+        final_app.clone()
+    } else {
+        clean_title
+    };
+    NotificationItem {
+        id,
+        app_name: final_app,
+        title: final_title,
+        body: clean_notification_field(body, brave),
+        icon_rgba,
+        timestamp,
+    }
+}
+
+fn is_known_html_tag_prefix(tag_lower: &str) -> bool {
+    matches!(
+        tag_lower,
+        "a" | "abbr"
+            | "b"
+            | "br"
+            | "code"
+            | "div"
+            | "em"
+            | "font"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "hr"
+            | "i"
+            | "img"
+            | "li"
+            | "ol"
+            | "p"
+            | "pre"
+            | "s"
+            | "small"
+            | "span"
+            | "strong"
+            | "sub"
+            | "sup"
+            | "table"
+            | "td"
+            | "th"
+            | "tr"
+            | "u"
+            | "ul"
+    )
+}
+
+fn is_break_tag_name(name_lower: &str, closing: bool) -> bool {
+    matches!(name_lower, "br" | "hr")
+        || (closing && matches!(name_lower, "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3"))
+}
+
+fn strip_html_tags(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len);
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] == b'<' {
+            let rest = &input[i..];
+            if rest.starts_with("<!--")
+                && let Some(end_rel) = rest.find("-->")
+            {
+                i += end_rel + 3;
+                continue;
+            }
+
+            let mut cursor = i + 1;
+            let closing = if cursor < len && bytes[cursor] == b'/' {
+                cursor += 1;
+                true
+            } else {
+                false
+            };
+
+            let tag_start = cursor;
+            let first = bytes.get(cursor).copied();
+            if let Some(ch) = first
+                && (ch.is_ascii_alphabetic() || ch == b'!' || ch == b'?')
+            {
+                cursor += 1;
+                while cursor < len
+                    && (bytes[cursor].is_ascii_alphanumeric()
+                        || bytes[cursor] == b':'
+                        || bytes[cursor] == b'-')
+                {
+                    cursor += 1;
+                }
+                let tag_name = &input[tag_start..cursor];
+                let delim = bytes.get(cursor).copied();
+                let valid_delim = matches!(delim, Some(b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r'));
+                if valid_delim || (delim.is_none() && tag_name.is_ascii()) {
+                    let mut scan = cursor;
+                    let mut quote: Option<u8> = None;
+                    let mut found_gt = false;
+                    while scan < len && scan - i <= 2048 {
+                        let b = bytes[scan];
+                        if let Some(q) = quote {
+                            if b == q {
+                                quote = None;
+                            }
+                        } else if b == b'"' || b == b'\'' {
+                            quote = Some(b);
+                        } else if b == b'>' {
+                            found_gt = true;
+                            scan += 1;
+                            break;
+                        }
+                        scan += 1;
+                    }
+                    let tag_lower = tag_name.to_ascii_lowercase();
+                    if found_gt {
+                        if is_break_tag_name(&tag_lower, closing) && !out.ends_with(' ') {
+                            out.push(' ');
+                        }
+                        i = scan;
+                        continue;
+                    } else if scan == len
+                        && is_known_html_tag_prefix(&tag_lower)
+                        && matches!(delim, Some(b' ' | b'/' | b'\t') | None)
+                    {
+                        // Truncated partial tag such as `<a href="https://...` at payload tail.
+                        i = len;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        let ch = input[i..].chars().next().unwrap_or('\0');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+
+    out
+}
+
+fn decode_html_entities(input: &str) -> String {
+    if !input.contains('&') {
+        return input.to_owned();
+    }
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut out = String::with_capacity(len);
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] == b'&' {
+            let max_end = (i + 12).min(len);
+            if let Some(semi_rel) = input[i + 1..max_end].find(';') {
+                let entity = &input[i + 1..i + 1 + semi_rel];
+                let decoded = match entity {
+                    _ if entity.eq_ignore_ascii_case("amp") => Some("&".to_owned()),
+                    _ if entity.eq_ignore_ascii_case("lt") => Some("<".to_owned()),
+                    _ if entity.eq_ignore_ascii_case("gt") => Some(">".to_owned()),
+                    _ if entity.eq_ignore_ascii_case("quot") => Some("\"".to_owned()),
+                    _ if entity.eq_ignore_ascii_case("apos") => Some("'".to_owned()),
+                    _ if entity.eq_ignore_ascii_case("nbsp") => Some(" ".to_owned()),
+                    _ if entity.eq_ignore_ascii_case("ndash") => Some("-".to_owned()),
+                    _ if entity.eq_ignore_ascii_case("mdash") => Some("—".to_owned()),
+                    _ if entity.eq_ignore_ascii_case("hellip") => Some("…".to_owned()),
+                    _ if entity.starts_with("#x") || entity.starts_with("#X") => {
+                        u32::from_str_radix(&entity[2..], 16)
+                            .ok()
+                            .and_then(char::from_u32)
+                            .filter(|c| !c.is_control() || c.is_whitespace())
+                            .map(|c| c.to_string())
+                    }
+                    _ if entity.starts_with('#') => entity[1..]
+                        .parse::<u32>()
+                        .ok()
+                        .and_then(char::from_u32)
+                        .filter(|c| !c.is_control() || c.is_whitespace())
+                        .map(|c| c.to_string()),
+                    _ => None,
+                };
+                if let Some(replacement) = decoded {
+                    out.push_str(&replacement);
+                    i += 1 + semi_rel + 1;
+                    continue;
+                }
+            }
+        }
+        let ch = input[i..].chars().next().unwrap_or('\0');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+
+    out
+}
+
+fn collapse_notification_whitespace(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut prev_space = true;
+    for ch in input.chars() {
+        if matches!(ch, '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}') {
+            continue;
+        }
+        if ch.is_control() && !ch.is_whitespace() {
+            continue;
+        }
+        if ch.is_whitespace() || ch == '\u{00A0}' {
+            if !prev_space {
+                out.push(' ');
+                prev_space = true;
+            }
+        } else {
+            out.push(ch);
+            prev_space = false;
+        }
+    }
+    if prev_space && out.ends_with(' ') {
+        out.pop();
+    }
+    out
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IslandVisualState {
     Idle,
@@ -74,6 +454,17 @@ impl IslandState {
         if self.paused {
             return;
         }
+        item.app_name = sanitize_notification_text(&item.app_name);
+        if item.app_name.is_empty() {
+            item.app_name = "System".to_owned();
+        }
+        let brave = is_brave_app(&item.app_name);
+        item.title = clean_notification_field(&item.title, brave);
+        if item.title.is_empty() {
+            item.title = item.app_name.clone();
+        }
+        item.body = clean_notification_field(&item.body, brave);
+
         const MAX_BODY_BYTES: usize = 2000;
         if item.body.len() > MAX_BODY_BYTES {
             let mut cut = MAX_BODY_BYTES;
@@ -243,6 +634,19 @@ impl IslandState {
 
     pub fn next_deadline(&self) -> Option<Instant> {
         self.collapse_deadline
+    }
+
+    /// Fraction (`1.0` down to `0.0`) of the notification auto-dismiss countdown remaining.
+    /// Returns `Some(1.0)` while hovered so the bar pauses cleanly, and `None` when idle.
+    pub fn collapse_remaining_frac(&self, now: Instant) -> Option<f32> {
+        self.active.as_ref()?;
+        if self.hovered {
+            return Some(1.0);
+        }
+        let deadline = self.collapse_deadline?;
+        let total = self.collapse_timeout.as_secs_f32().max(0.05);
+        let rem = deadline.saturating_duration_since(now).as_secs_f32();
+        Some((rem / total).clamp(0.0, 1.0))
     }
 
     fn activate(&mut self, item: NotificationItem, now: Instant) {
@@ -448,5 +852,93 @@ mod tests {
             state.push_notification(sample(&i.to_string(), "Burst"), t0);
         }
         assert_eq!(state.queued_count(), 32);
+    }
+
+    #[test]
+    fn sanitize_strips_web_links_html_and_entities_while_preserving_plain_symbols() {
+        assert_eq!(
+            sanitize_notification_text(
+                "<b>Budi</b><br/><a href=\"https://web.whatsapp.com\">Halo &amp; apa kabar?</a>"
+            ),
+            "Budi Halo & apa kabar?"
+        );
+        assert_eq!(
+            sanitize_notification_text(
+                "&lt;a href=&quot;https://web.whatsapp.com/&quot;&gt;Pesan baru&lt;/a&gt; &#x27;ok&#x27;&#32;&nbsp;!"
+            ),
+            "Pesan baru 'ok' !"
+        );
+        assert_eq!(
+            sanitize_notification_text("Teks terpotong <a href=\"https://example.com"),
+            "Teks terpotong"
+        );
+        assert_eq!(
+            sanitize_notification_text("1 &lt; 2 &amp; I &lt;3 Rust <user@example.com>"),
+            "1 < 2 & I <3 Rust <user@example.com>"
+        );
+
+        let t0 = Instant::now();
+        let mut state = IslandState::new(false, Duration::from_secs(5));
+        state.push_notification(
+            NotificationItem {
+                id: "wa-1".to_owned(),
+                app_name: "<span>WhatsApp Web</span>".to_owned(),
+                title: "<b>Grup</b> &amp; Teman".to_owned(),
+                body:
+                    "<a href=\"https://web.whatsapp.com\">https://web.whatsapp.com</a><br>Ayo rapat"
+                        .to_owned(),
+                icon_rgba: None,
+                timestamp: 1,
+            },
+            t0,
+        );
+        let active = state.active.as_ref().expect("active notification");
+        assert_eq!(active.app_name, "WhatsApp Web");
+        assert_eq!(active.title, "Grup & Teman");
+        assert_eq!(active.body, "https://web.whatsapp.com Ayo rapat");
+    }
+
+    #[test]
+    fn brave_notifications_hide_web_origin_on_windows_and_linux() {
+        let linux_wa = sanitized_notification_item(
+            "br-1".to_owned(),
+            "Brave",
+            "Linux",
+            "Budi (web.whatsapp.com)",
+            "<a href=\"https://web.whatsapp.com\">web.whatsapp.com</a>\n\nHalo lagi di jalan",
+            None,
+            10,
+        );
+        assert_eq!(linux_wa.title, "Budi");
+        assert_eq!(linux_wa.body, "Halo lagi di jalan");
+
+        let br_inline = sanitized_notification_item(
+            "br-2".to_owned(),
+            "Brave Browser",
+            "Windows",
+            "Live Stream — youtube.com",
+            "via chat.openai.com\nSelesai v0.2.0 jam 10.30",
+            None,
+            11,
+        );
+        assert_eq!(br_inline.title, "Live Stream");
+        assert_eq!(br_inline.body, "Selesai v0.2.0 jam 10.30");
+    }
+
+    #[test]
+    fn collapse_remaining_frac_shrinks_and_pauses_on_hover() {
+        let t0 = Instant::now();
+        let mut state = IslandState::new(false, Duration::from_secs(5));
+        assert_eq!(state.collapse_remaining_frac(t0), None);
+        state.push_notification(sample("c-1", "Countdown"), t0);
+        let half = state
+            .collapse_remaining_frac(t0 + Duration::from_millis(2500))
+            .expect("active bar frac");
+        assert!((half - 0.5).abs() < 0.05);
+        state.set_hovered(true, t0 + Duration::from_millis(2500));
+        assert_eq!(
+            state.collapse_remaining_frac(t0 + Duration::from_secs(4)),
+            Some(1.0)
+        );
     }
 }

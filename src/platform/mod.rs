@@ -46,6 +46,75 @@ pub struct MediaTrack {
     pub updated_at: Instant,
 }
 
+pub const NOTIF_ICON_SIZE: u32 = 28;
+
+pub fn decode_notification_icon_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(1024);
+    limits.max_image_height = Some(1024);
+    limits.max_alloc = Some(8 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
+    let resized = img.resize_exact(
+        NOTIF_ICON_SIZE,
+        NOTIF_ICON_SIZE,
+        image::imageops::FilterType::Triangle,
+    );
+    drop(img);
+    Some(resized.into_rgba8().into_raw())
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn decode_raw_notification_image(
+    width: i32,
+    height: i32,
+    rowstride: i32,
+    has_alpha: bool,
+    bits_per_sample: i32,
+    channels: i32,
+    data: &[u8],
+) -> Option<Vec<u8>> {
+    if width <= 0
+        || height <= 0
+        || width > 1024
+        || height > 1024
+        || bits_per_sample != 8
+        || rowstride <= 0
+    {
+        return None;
+    }
+    let expected_channels = if has_alpha { 4 } else { 3 };
+    if channels != expected_channels {
+        return None;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let stride = rowstride as usize;
+    let ch = channels as usize;
+    if stride < w.checked_mul(ch)? || data.len() < stride.checked_mul(h - 1)?.checked_add(w * ch)? {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        let row = &data[y * stride..y * stride + w * ch];
+        for px in row.chunks_exact(ch) {
+            let a = if has_alpha { px[3] } else { 255 };
+            rgba.extend_from_slice(&[px[0], px[1], px[2], a]);
+        }
+    }
+    let img = image::RgbaImage::from_raw(width as u32, height as u32, rgba)?;
+    let resized = image::imageops::resize(
+        &img,
+        NOTIF_ICON_SIZE,
+        NOTIF_ICON_SIZE,
+        image::imageops::FilterType::Triangle,
+    );
+    Some(resized.into_raw())
+}
+
 pub fn decode_album_art(bytes: &[u8]) -> Option<Arc<AlbumArt>> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
@@ -185,6 +254,16 @@ pub struct FontFileSpec {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub struct CursorScreenInfo {
+    pub cursor_x: f32,
+    pub cursor_y: f32,
+    pub screen_x: f32,
+    pub screen_y: f32,
+    pub screen_w: f32,
+    pub screen_h: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct HoverPollInput<'a> {
     pub window_title: &'a str,
     pub ctx_hovered: bool,
@@ -205,11 +284,17 @@ mod windows;
 #[cfg(windows)]
 pub mod windows_overlay;
 
+#[cfg(windows)]
+pub mod windows_settings;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
 #[cfg(target_os = "linux")]
 pub mod wayland_layer;
+
+#[cfg(target_os = "linux")]
+pub mod wayland_settings;
 
 pub fn spawn_listener(tx: mpsc::Sender<PlatformEvent>, on_wake: Arc<dyn Fn() + Send + Sync>) {
     #[cfg(windows)]
@@ -265,6 +350,43 @@ pub fn run_notification_spike() -> Result<String, String> {
 
     #[cfg(not(any(windows, target_os = "linux")))]
     Err("Notification spike is only supported on Windows and Linux".to_owned())
+}
+
+/// Enable or disable per-user start-with-OS. Never requires Administrator/root.
+pub fn set_autostart(enabled: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    return windows::set_autostart(enabled);
+
+    #[cfg(target_os = "linux")]
+    return linux::set_autostart(enabled);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = enabled;
+        Err("Autostart is only supported on Windows and Linux".to_owned())
+    }
+}
+
+/// Windows Run values must quote the executable path; keep this pure for unit tests.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_autostart_command(exe: &std::path::Path) -> String {
+    format!("\"{}\"", exe.to_string_lossy())
+}
+
+/// XDG autostart entry. `exec` is already escaped/quoted by the caller.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn desktop_autostart_entry(exec: &str) -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=Liebert Dynamic Island\n\
+         Comment=Lightweight native Rust Dynamic Island notification overlay\n\
+         Exec={exec}\n\
+         Icon=liebert-dynamic-island\n\
+         Terminal=false\n\
+         StartupNotify=false\n\
+         X-GNOME-Autostart-enabled=true\n"
+    )
 }
 
 #[cfg_attr(windows, allow(dead_code))]
@@ -378,7 +500,14 @@ pub fn sync_overlay_window(
     notch_dock_mode: bool,
 ) {
     #[cfg(windows)]
-    windows::sync_overlay_window(window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
+    windows::sync_overlay_window(
+        window_title,
+        x_logical,
+        y_logical,
+        w_logical,
+        h_logical,
+        notch_dock_mode,
+    );
 
     #[cfg(target_os = "linux")]
     linux::sync_overlay_window(
@@ -391,7 +520,14 @@ pub fn sync_overlay_window(
     );
 
     #[cfg(not(any(windows, target_os = "linux")))]
-    let _ = (window_title, x_logical, y_logical, w_logical, h_logical, notch_dock_mode);
+    let _ = (
+        window_title,
+        x_logical,
+        y_logical,
+        w_logical,
+        h_logical,
+        notch_dock_mode,
+    );
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -407,6 +543,20 @@ pub fn is_cursor_in_screen_rect(
     #[cfg(not(windows))]
     {
         let _ = (left_px, top_px, right_px, bottom_px);
+        None
+    }
+}
+
+pub fn cursor_screen_info(pixels_per_point: f32) -> Option<CursorScreenInfo> {
+    #[cfg(windows)]
+    return windows::cursor_screen_info(pixels_per_point);
+
+    #[cfg(target_os = "linux")]
+    return linux::cursor_screen_info(pixels_per_point);
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = pixels_per_point;
         None
     }
 }
@@ -596,6 +746,25 @@ mod tests {
 
         let gray = [180, 180, 180, 255].repeat(32);
         assert_eq!(extract_dominant_accent(&gray), None);
+    }
+
+    #[test]
+    fn windows_autostart_command_quotes_paths_with_spaces() {
+        let cmd = windows_autostart_command(std::path::Path::new(
+            r"C:\Program Files\Liebert\liebert-dynamic-island.exe",
+        ));
+        assert_eq!(
+            cmd,
+            r#""C:\Program Files\Liebert\liebert-dynamic-island.exe""#
+        );
+    }
+
+    #[test]
+    fn desktop_autostart_entry_has_required_keys() {
+        let entry = desktop_autostart_entry("\"/opt/My Apps/liebert\"");
+        assert!(entry.contains("[Desktop Entry]\n"));
+        assert!(entry.contains("Exec=\"/opt/My Apps/liebert\"\n"));
+        assert!(entry.contains("X-GNOME-Autostart-enabled=true\n"));
     }
 
     #[test]

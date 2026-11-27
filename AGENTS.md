@@ -43,6 +43,10 @@ Root vault Obsidian proyek berada di `/docs` (`.obsidian/` tetap di `.gitignore`
 
 ## 6. Standing Release & Packaging Workflow (User Preference)
 - Setiap perubahan selesai pada suatu request, **biasakan otomatis**:
-  1. **Naikkan versi** (`0.1.x` → `0.1.(x+1)`) pada `Cargo.toml`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/{PKGBUILD,.SRCINFO}`, string versi internal (`src/platform/linux.rs`, `src/lyrics.rs`), dan `README.md` (plus `Cargo.lock` via Cargo).
+  1. **Naikkan versi** (`X.Y.Z` → naikkan angka belakang `Z + 1`; jika `Z >= 10`, reset `Z = 0` dan naikkan angka tengah `Y += 1`; jika `Y >= 10`, reset `Y = 0` dan naikkan angka depan `X += 1`) pada `Cargo.toml`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/{PKGBUILD,.SRCINFO}`, string versi internal (`src/platform/linux.rs`, `src/lyrics.rs`), dan `README.md` (plus `Cargo.lock` via Cargo).
   2. **Build AppImage Linux** (`./scripts/build-linux-release.sh` → `dist/*.AppImage` & `dist/*.tar.gz`) serta **Windows Installer** (`installer/windows/installer.nsi` — bangun langsung bila `makensis`/Windows toolchain tersedia pada host, atau laporkan jujur bila host Linux tidak memiliki toolchain Windows/NSIS sementara workflow CI `.github/workflows/release.yml` menanganinya).
   3. **Sinkronkan `/docs`**, buat commit bersih, dan **auto-push ke branch yang sedang aktif** (`git push origin <current-branch>`).
+
+## 7. Standing RAM Budget Task (User Preference)
+- **Setiap** request perubahan kode, jalankan juga task penurunan memori: target `< 10 MB` RAM untuk **overlay Dynamic Island** dan **jendela Settings**, di **Windows dan Linux**.
+- Lakukan optimasi nyata (mis. mengurangi font/atlas, cache, alokasi per-frame, atau beban renderer), ukur RSS/Pss bila memungkinkan, dan laporkan hasilnya **jujur** — bila target belum tercapai, sebutkan pengukuran dan penghalangnya serta catat sebagai utang teknis di `/docs`. Jangan mengklaim `< 10 MB` tanpa pengukuran.

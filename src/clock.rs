@@ -91,4 +91,3 @@ mod tests {
         assert!(!is_valid_timezone("Mars/Olympus"));
     }
 }
-

@@ -42,7 +42,10 @@ pub fn compute_taskbar_widget_rect(
         TaskbarPosition::LeftOfTray | TaskbarPosition::RightOfTray => geom.top + ((tb_h - h) / 2),
     };
 
-    x = x.clamp(geom.left + pad_x, (geom.right - w - pad_x).max(geom.left + pad_x));
+    x = x.clamp(
+        geom.left + pad_x,
+        (geom.right - w - pad_x).max(geom.left + pad_x),
+    );
     (x, y, w, h)
 }
 
@@ -113,7 +116,7 @@ pub fn render_taskbar_ui(ui: &mut egui::Ui, config: &Config, metrics: &SystemMet
                     ui,
                     config.taskbar_format,
                     "CPU",
-                    "⚙",
+                    "CPU",
                     &format!("{:.0}%", metrics.cpu_pct),
                     metrics.cpu_pct / 100.0,
                     accent,
@@ -134,7 +137,7 @@ pub fn render_taskbar_ui(ui: &mut egui::Ui, config: &Config, metrics: &SystemMet
                     ui,
                     config.taskbar_format,
                     "RAM",
-                    "▤",
+                    "RAM",
                     &val,
                     metrics.ram_pct / 100.0,
                     accent,
@@ -145,12 +148,15 @@ pub fn render_taskbar_ui(ui: &mut egui::Ui, config: &Config, metrics: &SystemMet
 
             if config.taskbar_show_disk {
                 any_shown = true;
-                let pct = metrics.disk_activity_pct.or(metrics.disk_used_pct).unwrap_or(0.0);
+                let pct = metrics
+                    .disk_activity_pct
+                    .or(metrics.disk_used_pct)
+                    .unwrap_or(0.0);
                 draw_metric(
                     ui,
                     config.taskbar_format,
                     "DSK",
-                    "⛁",
+                    "DSK",
                     &format!("{pct:.0}%"),
                     pct / 100.0,
                     accent,

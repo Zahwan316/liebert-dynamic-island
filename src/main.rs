@@ -96,30 +96,33 @@ fn main() -> ExitCode {
     #[cfg(target_os = "linux")]
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         let config = Config::load();
-        let tray = crate::tray::TrayController::new(
-            config.auto_hide_when_idle,
-            config.notch_dock_mode,
-        )
-        .ok();
+        let tray =
+            crate::tray::TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode)
+                .ok();
         let ear_w = if config.notch_dock_mode {
             (12.0 * config.scale).round() * 2.0
         } else {
             0.0
         };
         let initial_w = config.idle_width * config.scale + ear_w;
-        let initial_h = 30.0 * config.scale;
+        let initial_h = match config.idle_display {
+            crate::config::IdleDisplayMode::Mascot => 38.0 * config.scale,
+            crate::config::IdleDisplayMode::Auto
+            | crate::config::IdleDisplayMode::Clock
+            | crate::config::IdleDisplayMode::Minimal
+                if config.show_idle_mascot =>
+            {
+                34.0 * config.scale
+            }
+            _ => 30.0 * config.scale,
+        };
         let initial_y = if config.notch_dock_mode {
             0.0
         } else {
             config.top_offset_px
         };
         if let Ok(()) = platform::wayland_layer::try_run_layer_shell(
-            config,
-            tray,
-            demo_mode,
-            initial_w,
-            initial_h,
-            initial_y,
+            config, tray, demo_mode, initial_w, initial_h, initial_y,
         ) {
             return ExitCode::SUCCESS;
         }
@@ -128,11 +131,9 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     {
         let config = Config::load();
-        let tray = crate::tray::TrayController::new(
-            config.auto_hide_when_idle,
-            config.notch_dock_mode,
-        )
-        .ok();
+        let tray =
+            crate::tray::TrayController::new(config.auto_hide_when_idle, config.notch_dock_mode)
+                .ok();
         if let Ok(()) = platform::windows_overlay::try_run_layered_direct(config, tray, demo_mode) {
             return ExitCode::SUCCESS;
         }
@@ -207,9 +208,8 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
                             let _ = event_tx.send(PlatformEvent::Status(status));
                         }
                         DaemonToUi::Media(track) => {
-                            let _ = event_tx.send(PlatformEvent::Media(
-                                track.map(platform::MediaTrack::from),
-                            ));
+                            let _ = event_tx
+                                .send(PlatformEvent::Media(track.map(platform::MediaTrack::from)));
                         }
                         DaemonToUi::Fullscreen(ex, win) => {
                             let _ = event_tx.send(PlatformEvent::Fullscreen(ex, win));
@@ -316,11 +316,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
             sysmon_cmd_tx: Some(sysmon_cmd_tx),
         };
         match platform::windows_overlay::run_layered_ipc_client(
-            config,
-            snapshot,
-            channels,
-            wake_hwnd,
-            demo_mode,
+            config, snapshot, channels, wake_hwnd, demo_mode,
         ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -371,7 +367,7 @@ fn run_ui_client(ipc_addr: &str, demo_mode: bool) -> ExitCode {
             WINDOW_TITLE,
             options,
             Box::new(move |cc| {
-                ui::apply_configured_fonts(&cc.egui_ctx, &config.font_name);
+                ui::apply_configured_fonts_light(&cc.egui_ctx, &config.font_name);
                 let egui_ctx = cc.egui_ctx.clone();
                 let wake: Arc<dyn Fn() + Send + Sync> =
                     Arc::new(move || egui_ctx.request_repaint());
