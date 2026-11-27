@@ -20,7 +20,7 @@ tags:
 
 ### Changed (v0.2.0)
 
-- `AGENTS.md`, `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi dirilis ke **`0.2.0`** dengan aturan carry-over semver di `AGENTS.md` §6 (`Z >= 10 → Z = 0, Y += 1`; `Y >= 10 → Y = 0, X += 1`). AppImage & `.tar.gz` Linux serta installer NSIS `3.474.401` byte & `.zip` Windows dibangun ulang; `cargo fmt --all -- --check`, `cargo test --offline` **80 passed**, `cargo clippy --offline --all-targets -- -D warnings`, dan `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` (Docker `rust:slim` + `gcc-mingw-w64-x86-64` + `nsis`) bersih.
+- `AGENTS.md`, `CHANGELOG.md`, `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi dirilis ke **`0.2.0`** dengan aturan carry-over semver dan alur rilis `dev-main` → `main` → changelog + upload GitHub Releases di `AGENTS.md` §6; `CHANGELOG.md` di root dibuat dan aset `AppImage`, `.tar.gz`, Windows `.zip`, NSIS `.exe`, serta `liebert-dynamic-island-aur-0.2.0.tar.gz` disiapkan. `cargo fmt --all -- --check`, `cargo test --offline` **80 passed**, `cargo clippy --offline --all-targets -- -D warnings`, dan `cargo clippy --target x86_64-pc-windows-gnu --all-targets -- -D warnings` bersih.
 
 ### Fixed (v0.2.0)
 
