@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, CornerRadius, FontId, Rect, RichText, Stroke, StrokeKind, Vec2};
+use egui::{self, Color32, CornerRadius, FontId, Rect, RichText, Stroke, StrokeKind, Vec2};
 
 use crate::battery::format_remaining;
 use crate::config::{Config, TaskbarFormat, TaskbarPosition};
@@ -149,8 +149,8 @@ pub fn render_taskbar_ui(ui: &mut egui::Ui, config: &Config, metrics: &SystemMet
             if config.taskbar_show_disk {
                 any_shown = true;
                 let pct = metrics
-                    .disk_activity_pct
-                    .or(metrics.disk_used_pct)
+                    .disk_used_pct
+                    .or(metrics.disk_activity_pct)
                     .unwrap_or(0.0);
                 draw_metric(
                     ui,

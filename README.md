@@ -110,11 +110,11 @@ Every `v*` GitHub Release contains:
 
 | Asset | Install |
 | :--- | :--- |
-| `Liebert_Dynamic_Island-0.2.0-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
+| `Liebert_Dynamic_Island-0.2.1-x86_64.AppImage` | `chmod +x` then run it (needs FUSE, or use `--appimage-extract`). |
 | `liebert-dynamic-island-linux-x86_64.tar.gz` | `tar -xzf`, then run `./liebert-dynamic-island-linux-x86_64/liebert-dynamic-island`. Includes `LICENSE.md`, `README.md`, `.desktop` and icon. |
 | `liebert-dynamic-island-windows-x86_64-setup.exe` | NSIS installer (per-user install, Start Menu shortcuts + uninstaller). |
 | `liebert-dynamic-island-windows-x86_64.zip` | Portable `.exe` + license + README. |
-| `liebert-dynamic-island-aur-0.2.0.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
+| `liebert-dynamic-island-aur-0.2.1.tar.gz` | AUR `PKGBUILD` + `.SRCINFO` for Arch Linux. |
 
 Arch Linux users can build from `packaging/aur/` with `makepkg -si` once the package is submitted to the AUR (`yay -S liebert-dynamic-island`). AUR submission itself needs a maintainer account and is **not** automated by CI.
 
@@ -305,7 +305,7 @@ cargo clippy --all-targets -- -D warnings  # Run Clippy with warnings treated as
 cargo build --release                      # Build stripped LTO release binary
 ./scripts/build-linux-release.sh           # Linux tar.gz + AppImage in dist/
 # Windows (with NSIS installed, from repo root):
-#   makensis /DAPP_VERSION=0.2.0 installer\windows\installer.nsi
+#   makensis /DAPP_VERSION=0.2.1 installer\windows\installer.nsi
 ```
 
 Pada host Linux, installer Windows yang sama dapat dibangun tanpa mesin Windows memakai Docker (cross-compile GNU + `makensis`):
@@ -319,7 +319,7 @@ docker run --rm -e DEBIAN_FRONTEND=noninteractive -v "$PWD":/work -w /work rust:
   mkdir -p dist/staging-win
   cp target/x86_64-pc-windows-gnu/release/liebert-dynamic-island.exe dist/staging-win/
   cp LICENSE.md README.md dist/staging-win/
-  makensis -DAPP_VERSION=0.2.0 -DSTAGING_DIR=/work/dist/staging-win \
+  makensis -DAPP_VERSION=0.2.1 -DSTAGING_DIR=/work/dist/staging-win \
     -DOUT_FILE=/work/dist/liebert-dynamic-island-windows-x86_64-setup.exe \
     installer/windows/installer.nsi
 '

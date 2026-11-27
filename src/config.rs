@@ -248,6 +248,141 @@ impl Default for Config {
     }
 }
 
+pub const TRANSLATE_LANGUAGES: &[(&str, &str)] = &[
+    ("id", "Indonesian"),
+    ("en", "English"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("zh-CN", "Chinese"),
+    ("ar", "Arabic"),
+    ("es", "Spanish"),
+];
+
+pub const COMMON_TIMEZONES: &[(&str, &str)] = &[
+    ("Local", "System Local"),
+    ("UTC", "UTC"),
+    ("Asia/Jakarta", "WIB — Asia/Jakarta"),
+    ("Asia/Makassar", "WITA — Asia/Makassar"),
+    ("Asia/Jayapura", "WIT — Asia/Jayapura"),
+    ("Asia/Singapore", "SGT — Asia/Singapore"),
+    ("Asia/Tokyo", "JST — Asia/Tokyo"),
+    ("Asia/Seoul", "KST — Asia/Seoul"),
+    ("Europe/London", "GMT/BST — Europe/London"),
+    ("Europe/Berlin", "CET — Europe/Berlin"),
+    ("America/New_York", "EST/EDT — New York"),
+    ("America/Los_Angeles", "PST/PDT — Los Angeles"),
+    ("Australia/Sydney", "AEST — Sydney"),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThemePreset {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub bg_color: [u8; 4],
+    pub accent_color: [u8; 3],
+    pub text_color: [u8; 3],
+    pub border_alpha: u8,
+}
+
+pub const THEME_PRESETS: &[ThemePreset] = &[
+    ThemePreset {
+        id: "obsidian",
+        name: "Obsidian",
+        bg_color: [16, 16, 20, 240],
+        accent_color: [110, 195, 255],
+        text_color: [245, 245, 248],
+        border_alpha: 36,
+    },
+    ThemePreset {
+        id: "crimson",
+        name: "Crimson",
+        bg_color: [30, 29, 28, 248],
+        accent_color: [224, 92, 98],
+        text_color: [248, 246, 245],
+        border_alpha: 28,
+    },
+    ThemePreset {
+        id: "midnight",
+        name: "Midnight",
+        bg_color: [15, 23, 42, 235],
+        accent_color: [96, 165, 250],
+        text_color: [241, 245, 249],
+        border_alpha: 48,
+    },
+    ThemePreset {
+        id: "amoled",
+        name: "AMOLED",
+        bg_color: [0, 0, 0, 252],
+        accent_color: [52, 211, 153],
+        text_color: [255, 255, 255],
+        border_alpha: 28,
+    },
+    ThemePreset {
+        id: "slate",
+        name: "Slate",
+        bg_color: [36, 40, 48, 236],
+        accent_color: [244, 162, 97],
+        text_color: [248, 250, 252],
+        border_alpha: 52,
+    },
+    ThemePreset {
+        id: "aurora",
+        name: "Aurora Emerald",
+        bg_color: [10, 24, 22, 238],
+        accent_color: [45, 212, 191],
+        text_color: [236, 253, 245],
+        border_alpha: 42,
+    },
+    ThemePreset {
+        id: "sakura",
+        name: "Sakura Dusk",
+        bg_color: [26, 16, 24, 240],
+        accent_color: [244, 114, 182],
+        text_color: [253, 242, 248],
+        border_alpha: 40,
+    },
+    ThemePreset {
+        id: "cyberpunk",
+        name: "Cyberpunk Neon",
+        bg_color: [14, 12, 28, 242],
+        accent_color: [192, 132, 252],
+        text_color: [245, 243, 255],
+        border_alpha: 46,
+    },
+    ThemePreset {
+        id: "nord",
+        name: "Nordic Frost",
+        bg_color: [34, 40, 50, 238],
+        accent_color: [136, 192, 208],
+        text_color: [236, 239, 244],
+        border_alpha: 44,
+    },
+    ThemePreset {
+        id: "sunset",
+        name: "Sunset Amber",
+        bg_color: [28, 18, 16, 242],
+        accent_color: [251, 146, 60],
+        text_color: [255, 247, 237],
+        border_alpha: 38,
+    },
+    ThemePreset {
+        id: "lavender",
+        name: "Lavender Mist",
+        bg_color: [22, 20, 34, 238],
+        accent_color: [165, 180, 252],
+        text_color: [238, 242, 255],
+        border_alpha: 44,
+    },
+    ThemePreset {
+        id: "matcha",
+        name: "Matcha Zen",
+        bg_color: [18, 24, 18, 240],
+        accent_color: [134, 205, 120],
+        text_color: [242, 248, 240],
+        border_alpha: 36,
+    },
+];
+
 impl Config {
     pub fn path() -> Option<PathBuf> {
         ProjectDirs::from("", "", "liebert-dynamic-island")
@@ -297,39 +432,21 @@ impl Config {
         fs::write(path, encoded)
     }
 
+    pub fn matching_preset(&self) -> Option<&'static ThemePreset> {
+        THEME_PRESETS.iter().find(|p| {
+            p.bg_color == self.bg_color
+                && p.accent_color == self.accent_color
+                && p.text_color == self.text_color
+                && p.border_alpha == self.border_alpha
+        })
+    }
+
     pub fn apply_preset(&mut self, name: &str) {
-        match name {
-            "obsidian" => {
-                self.bg_color = [16, 16, 20, 240];
-                self.accent_color = [110, 195, 255];
-                self.text_color = [245, 245, 248];
-                self.border_alpha = 36;
-            }
-            "midnight" => {
-                self.bg_color = [15, 23, 42, 235];
-                self.accent_color = [96, 165, 250];
-                self.text_color = [241, 245, 249];
-                self.border_alpha = 48;
-            }
-            "amoled" => {
-                self.bg_color = [0, 0, 0, 252];
-                self.accent_color = [52, 211, 153];
-                self.text_color = [255, 255, 255];
-                self.border_alpha = 28;
-            }
-            "slate" => {
-                self.bg_color = [36, 40, 48, 236];
-                self.accent_color = [244, 162, 97];
-                self.text_color = [248, 250, 252];
-                self.border_alpha = 52;
-            }
-            "crimson" => {
-                self.bg_color = [30, 29, 28, 248];
-                self.accent_color = [224, 92, 98];
-                self.text_color = [248, 246, 245];
-                self.border_alpha = 28;
-            }
-            _ => {}
+        if let Some(preset) = THEME_PRESETS.iter().find(|p| p.id == name) {
+            self.bg_color = preset.bg_color;
+            self.accent_color = preset.accent_color;
+            self.text_color = preset.text_color;
+            self.border_alpha = preset.border_alpha;
         }
     }
 }
@@ -416,5 +533,18 @@ mod tests {
     fn invalid_toml_falls_back_to_default() {
         let parsed = Config::from_toml_str("not valid = [toml");
         assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn theme_presets_apply_and_match_round_trip() {
+        assert!(THEME_PRESETS.len() >= 10);
+        let mut cfg = Config::default();
+        assert_eq!(cfg.matching_preset().map(|p| p.id), Some("obsidian"));
+        for preset in THEME_PRESETS {
+            cfg.apply_preset(preset.id);
+            assert_eq!(cfg.matching_preset().map(|p| p.id), Some(preset.id));
+        }
+        cfg.accent_color = [12, 34, 56];
+        assert!(cfg.matching_preset().is_none());
     }
 }

@@ -1,27 +1,6 @@
 use chrono::{DateTime, Local, Timelike, Utc};
 use chrono_tz::Tz;
 
-pub const COMMON_TIMEZONES: &[(&str, &str)] = &[
-    ("Local", "System Local"),
-    ("UTC", "UTC"),
-    ("Asia/Jakarta", "WIB — Asia/Jakarta"),
-    ("Asia/Makassar", "WITA — Asia/Makassar"),
-    ("Asia/Jayapura", "WIT — Asia/Jayapura"),
-    ("Asia/Singapore", "SGT — Asia/Singapore"),
-    ("Asia/Tokyo", "JST — Asia/Tokyo"),
-    ("Asia/Seoul", "KST — Asia/Seoul"),
-    ("Europe/London", "GMT/BST — Europe/London"),
-    ("Europe/Berlin", "CET — Europe/Berlin"),
-    ("America/New_York", "EST/EDT — New York"),
-    ("America/Los_Angeles", "PST/PDT — Los Angeles"),
-    ("Australia/Sydney", "AEST — Sydney"),
-];
-
-pub fn is_valid_timezone(tz_name: &str) -> bool {
-    let trimmed = tz_name.trim();
-    trimmed.eq_ignore_ascii_case("local") || trimmed.parse::<Tz>().is_ok()
-}
-
 pub fn format_clock(
     now_utc: DateTime<Utc>,
     tz_name: &str,
@@ -71,6 +50,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+    use crate::clock_light::is_valid_timezone;
 
     #[test]
     fn formats_iana_timezone_24h_and_12h() {

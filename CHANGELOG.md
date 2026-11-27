@@ -5,6 +5,29 @@ Versioning follows `X.Y.Z` with automatic carry-over at `10` (`Z >= 10` → `Y +
 
 ---
 
+## [0.2.1] - 2026-11-28
+
+### Added
+- **Neck-Crack Rotate-X Nodding Music Animation (Windows & Linux)** (`src/ui/icons.rs`, `src/ui/mod.rs`): `MascotMusicMotion` now carries a signed `nod_x`/`pitch_x` beat signal; the mascot head rotates about the X axis a few degrees with a small vertical drop around a neck pivot while keeping EQ bars, cursor tracking, and natural blinking.
+- **Theme Preset Dropdown in Settings (Windows & Linux)** (`src/config.rs`, `src/ui/settings.rs`): Eleven curated `ThemePreset` entries are selectable from a native `egui::ComboBox`, with live accent/material/border preview and a `Custom` fallback for hand-tuned colors.
+- **Extended System Telemetry (Windows & Linux)** (`src/sysmon.rs`, `src/ui/settings.rs`, `src/ui/taskbar.rs`): CPU temperature, GPU temperature, GPU utilization, and VRAM used/total are sampled from sysfs/`nvidia-smi` on Linux and PDH/DXGI/WMI on Windows, cached with bounded intervals, and rendered in the System monitor plus Settings toggles.
+- **Richer Tasks Visualization (Windows & Linux)** (`src/ui/settings.rs`, `src/ui/icons.rs`): The Tasks tab now renders a completion progress bar, per-task accent/done status stripes, ACTIVE/DONE badges, icon-based remove buttons, and a `pending · done` header badge.
+
+### Changed
+- **Lightweight Cross-Platform Module Split for RAM** (`Cargo.toml`, `src/calendar_types.rs`, `src/clock_light.rs`, `src/platform/light.rs`, `src/ui/fonts.rs`, `src/ui/settings_eframe.rs`, `src/ui/mod.rs`, `src/ui/settings.rs`): `egui`/`epaint` are direct global dependencies, while `eframe`/`egui_glow` are now Linux/X11-only. Heavy calendar/clock types and font helpers were moved into small dedicated modules, Settings lazily scans device fonts only when the picker opens, and the Lyrics worker uses a `256 KiB` stack instead of the default.
+- **Allocator Tuning at Startup** (`src/main.rs`, `src/platform/light.rs`): `configure_low_ram_allocator()` caps glibc arenas at 2 and lowers the mmap threshold to reduce retained heap pages.
+- Release metadata and User-Agent strings bumped to **`0.2.1`** across `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/{PKGBUILD,.SRCINFO}`, `src/platform/linux.rs`, `src/lyrics.rs`, and `README.md`.
+
+### Fixed
+- **Linux Disk Usage Detection** (`src/sysmon.rs`): Capacity is aggregated from real mounted filesystems via `df`-style parsing (skipping pseudo filesystems) and cached independently of disk-activity toggles, so used/total storage is reported even when `taskbar_show_disk` is off.
+
+### Measured
+- `cargo test --offline` **83 passed**; `cargo fmt --all -- --check`, `cargo clippy --offline --all-targets -- -D warnings`, and Windows-target `clippy` (Docker `rust:slim` + MinGW) are clean.
+- Release artifacts rebuilt: `Liebert_Dynamic_Island-0.2.1-x86_64.AppImage`, `liebert-dynamic-island-linux-x86_64.tar.gz`, `liebert-dynamic-island-windows-x86_64.zip`, `liebert-dynamic-island-windows-x86_64-setup.exe`, and `liebert-dynamic-island-aur-0.2.1.tar.gz`.
+- Linux RSS/Pss (Docker `rust:slim`, Xvfb/Weston, release build): overlay `--demo` **10.52 MB RSS / 5.80 MB Pss**; Wayland `--settings` **15.15 MB RSS / 12.32 MB Pss**; X11 `--settings` **124.34 MB RSS** on the eframe/Glow path. The `< 10 MB` total-process target is **not yet met**; Windows RSS cannot be measured from this Linux host. See `docs/03 - Catatan Rapat & Keputusan.md` (ADR-033).
+
+---
+
 ## [0.2.0] - 2026-11-27
 
 ### Added

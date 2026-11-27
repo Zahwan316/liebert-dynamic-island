@@ -1,16 +1,31 @@
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use crate::battery::{BatteryInfo, read_battery};
+use crate::battery::BatteryInfo;
 use crate::platform::PlatformEvent;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct GpuSample {
+    pub temp_c: Option<f32>,
+    pub util_pct: Option<f32>,
+    pub vram_used_mb: Option<f32>,
+    pub vram_total_mb: Option<f32>,
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SystemMetrics {
     pub cpu_pct: f32,
+    pub cpu_temp_c: Option<f32>,
+    pub gpu_pct: Option<f32>,
+    pub gpu_temp_c: Option<f32>,
+    pub gpu_vram_used_mb: Option<f32>,
+    pub gpu_vram_total_mb: Option<f32>,
     pub ram_pct: f32,
     pub ram_used_gb: f32,
     pub ram_total_gb: f32,
     pub disk_used_pct: Option<f32>,
+    pub disk_used_gb: Option<f32>,
+    pub disk_total_gb: Option<f32>,
     pub disk_activity_pct: Option<f32>,
     pub net_down_bps: u64,
     pub net_up_bps: u64,
@@ -39,6 +54,24 @@ pub fn format_speed_bps(bps: u64) -> String {
 }
 
 #[allow(dead_code)]
+pub fn format_vram_mb(used_mb: f32, total_mb: Option<f32>) -> String {
+    let used_clean = used_mb.max(0.0);
+    if let Some(total) = total_mb
+        && total > 0.0
+    {
+        if total >= 1024.0 {
+            return format!("{:.1}/{:.1}G", used_clean / 1024.0, total / 1024.0);
+        }
+        return format!("{:.0}/{:.0}M", used_clean, total);
+    }
+    if used_clean >= 1024.0 {
+        format!("{:.1}G", used_clean / 1024.0)
+    } else {
+        format!("{used_clean:.0}M")
+    }
+}
+
+#[allow(dead_code)]
 pub fn compute_cpu_delta(prev: (u64, u64, u64), curr: (u64, u64, u64)) -> f32 {
     let d_idle = curr.0.saturating_sub(prev.0);
     let d_kernel = curr.1.saturating_sub(prev.1);
@@ -51,29 +84,81 @@ pub fn compute_cpu_delta(prev: (u64, u64, u64), curr: (u64, u64, u64)) -> f32 {
     ((busy as f64 / d_total as f64) * 100.0).clamp(0.0, 100.0) as f32
 }
 
+/// Parses `nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits`.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+pub(crate) fn parse_nvidia_smi_csv(text: &str) -> Option<GpuSample> {
+    let mut best: Option<(f32, GpuSample)> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = trimmed.split(',').map(str::trim).collect();
+        if cols.len() < 4 {
+            continue;
+        }
+        let parse_opt = |s: &str| -> Option<f32> {
+            let v = s.parse::<f32>().ok()?;
+            v.is_finite().then_some(v)
+        };
+        let temp_c = parse_opt(cols[0]).filter(|v| (5.0..=125.0).contains(v));
+        let util_pct = parse_opt(cols[1]).map(|v| v.clamp(0.0, 100.0));
+        let vram_used_mb = parse_opt(cols[2]).filter(|v| *v >= 0.0);
+        let vram_total_mb = parse_opt(cols[3]).filter(|v| *v > 0.0);
+        if temp_c.is_none()
+            && util_pct.is_none()
+            && vram_used_mb.is_none()
+            && vram_total_mb.is_none()
+        {
+            continue;
+        }
+        let score = util_pct.unwrap_or(0.0) + vram_used_mb.unwrap_or(0.0) * 0.001;
+        let sample = GpuSample {
+            temp_c,
+            util_pct,
+            vram_used_mb,
+            vram_total_mb,
+        };
+        if best.is_none_or(|(b_score, _)| score > b_score) {
+            best = Some((score, sample));
+        }
+    }
+    best.map(|(_, sample)| sample)
+}
+
 #[cfg(windows)]
 mod imp {
+    use std::collections::HashMap;
     use std::ffi::c_void;
+    use std::os::windows::process::CommandExt;
+    use std::path::PathBuf;
+    use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
     use windows::Win32::Foundation::FILETIME;
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
     use windows::Win32::NetworkManagement::IpHelper::{
         FreeMibTable, GetIfTable2, MIB_IF_ROW2, MIB_IF_TABLE2,
     };
     use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
     use windows::Win32::System::Performance::{
-        PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE, PDH_HCOUNTER, PDH_HQUERY, PdhAddEnglishCounterW,
-        PdhCloseQuery, PdhCollectQueryData, PdhGetFormattedCounterValue, PdhOpenQueryW,
+        PDH_FMT, PDH_FMT_COUNTERVALUE, PDH_FMT_COUNTERVALUE_ITEM_W, PDH_FMT_DOUBLE, PDH_FMT_LARGE,
+        PDH_HCOUNTER, PDH_HQUERY, PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData,
+        PdhGetFormattedCounterArrayW, PdhGetFormattedCounterValue, PdhOpenQueryW,
     };
     use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     use windows::Win32::System::Threading::GetSystemTimes;
     use windows::core::w;
 
-    use super::{SystemMetrics, compute_cpu_delta};
+    use super::{GpuSample, SystemMetrics, compute_cpu_delta, parse_nvidia_smi_csv};
     use crate::battery::read_battery;
 
     const IF_TYPE_SOFTWARE_LOOPBACK: u32 = 24;
+    const CREATE_NO_WINDOW_FLAG: u32 = 0x0800_0000;
+    const PDH_MORE_DATA_ERR: u32 = 0x8000_07D2;
+    const PDH_CSTATUS_VALID_MAX: u32 = 1;
+    const DXGI_ADAPTER_FLAG_SOFTWARE_BIT: u32 = 2;
 
     fn ft_to_u64(ft: FILETIME) -> u64 {
         ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
@@ -102,7 +187,7 @@ mod imp {
         (mem.dwMemoryLoad as f32, used as f32, total as f32)
     }
 
-    fn read_system_drive_used_pct() -> Option<f32> {
+    fn read_system_drive_usage() -> Option<(f32, f32, f32)> {
         let mut free_avail = 0u64;
         let mut total_bytes = 0u64;
         let mut total_free = 0u64;
@@ -118,8 +203,84 @@ mod imp {
         if total_bytes == 0 {
             return None;
         }
+        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
         let used = total_bytes.saturating_sub(total_free);
-        Some(((used as f64 / total_bytes as f64) * 100.0).clamp(0.0, 100.0) as f32)
+        let pct = ((used as f64 / total_bytes as f64) * 100.0).clamp(0.0, 100.0) as f32;
+        Some((
+            pct,
+            (used as f64 / GIB) as f32,
+            (total_bytes as f64 / GIB) as f32,
+        ))
+    }
+
+    fn read_dxgi_vram_total_mb() -> Option<f32> {
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.ok()?;
+        let mut best_mb: Option<f32> = None;
+        let mut idx = 0u32;
+        while let Ok(adapter) = unsafe { factory.EnumAdapters1(idx) } {
+            idx += 1;
+            let Ok(desc) = (unsafe { adapter.GetDesc1() }) else {
+                continue;
+            };
+            if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE_BIT) != 0 {
+                continue;
+            }
+            let bytes = if desc.DedicatedVideoMemory > 0 {
+                desc.DedicatedVideoMemory
+            } else {
+                desc.DedicatedSystemMemory
+            };
+            if bytes > 0 {
+                let mb = (bytes as f64 / (1024.0 * 1024.0)) as f32;
+                if best_mb.is_none_or(|b| mb > b) {
+                    best_mb = Some(mb);
+                }
+            }
+        }
+        best_mb
+    }
+
+    fn find_nvidia_smi_exe() -> Option<PathBuf> {
+        static CACHE: OnceLock<Option<PathBuf>> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                let candidates = [
+                    r"C:\Windows\System32\nvidia-smi.exe",
+                    r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+                    "nvidia-smi.exe",
+                ];
+                for c in candidates {
+                    if let Ok(out) = std::process::Command::new(c)
+                        .args([
+                            "--query-gpu=temperature.gpu",
+                            "--format=csv,noheader,nounits",
+                        ])
+                        .creation_flags(CREATE_NO_WINDOW_FLAG)
+                        .output()
+                        && out.status.success()
+                    {
+                        return Some(PathBuf::from(c));
+                    }
+                }
+                None
+            })
+            .clone()
+    }
+
+    fn read_nvidia_smi() -> Option<GpuSample> {
+        let exe = find_nvidia_smi_exe()?;
+        let out = std::process::Command::new(exe)
+            .args([
+                "--query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ])
+            .creation_flags(CREATE_NO_WINDOW_FLAG)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        parse_nvidia_smi_csv(&String::from_utf8_lossy(&out.stdout))
     }
 
     fn read_net_totals() -> Option<(u64, u64)> {
@@ -144,27 +305,20 @@ mod imp {
         Some((rx, tx))
     }
 
-    struct PdhDisk {
+    struct PdhCounter {
         query: PDH_HQUERY,
         counter: PDH_HCOUNTER,
         primed: bool,
     }
 
-    impl PdhDisk {
-        fn new() -> Option<Self> {
+    impl PdhCounter {
+        fn new(path: windows::core::PCWSTR) -> Option<Self> {
             let mut query = PDH_HQUERY::default();
             if unsafe { PdhOpenQueryW(None, 0, &mut query) } != 0 {
                 return None;
             }
             let mut counter = PDH_HCOUNTER::default();
-            let status = unsafe {
-                PdhAddEnglishCounterW(
-                    query,
-                    w!("\\PhysicalDisk(_Total)\\% Disk Time"),
-                    0,
-                    &mut counter,
-                )
-            };
+            let status = unsafe { PdhAddEnglishCounterW(query, path, 0, &mut counter) };
             if status != 0 {
                 unsafe { PdhCloseQuery(query) };
                 return None;
@@ -173,11 +327,11 @@ mod imp {
             Some(Self {
                 query,
                 counter,
-                primed: true,
+                primed: false,
             })
         }
 
-        fn sample(&mut self) -> Option<f32> {
+        fn sample_scalar_double(&mut self) -> Option<f32> {
             if unsafe { PdhCollectQueryData(self.query) } != 0 {
                 return None;
             }
@@ -188,19 +342,65 @@ mod imp {
             let mut val = PDH_FMT_COUNTERVALUE::default();
             if unsafe { PdhGetFormattedCounterValue(self.counter, PDH_FMT_DOUBLE, None, &mut val) }
                 != 0
+                || val.CStatus > PDH_CSTATUS_VALID_MAX
             {
                 return None;
             }
             let pct = unsafe { val.Anonymous.doubleValue };
-            if pct.is_finite() {
-                Some((pct as f32).clamp(0.0, 100.0))
-            } else {
-                None
+            pct.is_finite().then_some((pct as f32).clamp(0.0, 100.0))
+        }
+
+        fn sample_array<F>(&mut self, fmt: PDH_FMT, mut collect_fn: F) -> bool
+        where
+            F: FnMut(&str, PDH_FMT_COUNTERVALUE),
+        {
+            if unsafe { PdhCollectQueryData(self.query) } != 0 {
+                return false;
             }
+            if !self.primed {
+                self.primed = true;
+                return false;
+            }
+            let mut buf_size = 0u32;
+            let mut count = 0u32;
+            let status = unsafe {
+                PdhGetFormattedCounterArrayW(self.counter, fmt, &mut buf_size, &mut count, None)
+            };
+            if status != PDH_MORE_DATA_ERR || buf_size == 0 || count == 0 {
+                return false;
+            }
+            let elem_sz = std::mem::size_of::<PDH_FMT_COUNTERVALUE_ITEM_W>().max(1);
+            let cap = (buf_size as usize).div_ceil(elem_sz);
+            let mut items = vec![PDH_FMT_COUNTERVALUE_ITEM_W::default(); cap];
+            let status2 = unsafe {
+                PdhGetFormattedCounterArrayW(
+                    self.counter,
+                    fmt,
+                    &mut buf_size,
+                    &mut count,
+                    Some(items.as_mut_ptr()),
+                )
+            };
+            if status2 != 0 {
+                return false;
+            }
+            let valid_len = (count as usize).min(items.len());
+            for item in &items[..valid_len] {
+                if item.FmtValue.CStatus > PDH_CSTATUS_VALID_MAX {
+                    continue;
+                }
+                let name = if item.szName.0.is_null() {
+                    String::new()
+                } else {
+                    unsafe { item.szName.to_string() }.unwrap_or_default()
+                };
+                collect_fn(&name, item.FmtValue);
+            }
+            true
         }
     }
 
-    impl Drop for PdhDisk {
+    impl Drop for PdhCounter {
         fn drop(&mut self) {
             if !self.query.is_invalid() {
                 unsafe { PdhCloseQuery(self.query) };
@@ -208,11 +408,27 @@ mod imp {
         }
     }
 
+    fn extract_luid_key(instance_name: &str) -> &str {
+        if let Some(pos) = instance_name.find("luid_") {
+            let tail = &instance_name[pos..];
+            if let Some(end) = tail.find("_eng_") {
+                return &tail[..end];
+            }
+            return tail;
+        }
+        "default"
+    }
+
     pub struct Sampler {
         prev_cpu: Option<(u64, u64, u64)>,
         prev_net: Option<(u64, u64, Instant)>,
-        last_disk_cap: Option<(f32, Instant)>,
-        pdh_disk: Option<PdhDisk>,
+        last_disk_cap: Option<((f32, f32, f32), Instant)>,
+        pdh_disk: Option<PdhCounter>,
+        pdh_gpu_util: Option<PdhCounter>,
+        pdh_gpu_vram: Option<PdhCounter>,
+        pdh_thermal: Option<PdhCounter>,
+        dxgi_vram_total_mb: Option<f32>,
+        nvidia_cache: Option<(GpuSample, Instant)>,
     }
 
     impl Sampler {
@@ -222,6 +438,16 @@ mod imp {
                 prev_net: None,
                 last_disk_cap: None,
                 pdh_disk: None,
+                pdh_gpu_util: PdhCounter::new(w!(
+                    "\\GPU Engine(*engtype_3D)\\Utilization Percentage"
+                )),
+                pdh_gpu_vram: PdhCounter::new(w!("\\GPU Adapter Memory(*)\\Dedicated Usage")),
+                pdh_thermal: PdhCounter::new(w!(
+                    "\\Thermal Zone Information(*)\\High Precision Temperature"
+                ))
+                .or_else(|| PdhCounter::new(w!("\\Thermal Zone Information(*)\\Temperature"))),
+                dxgi_vram_total_mb: read_dxgi_vram_total_mb(),
+                nvidia_cache: None,
             }
         }
 
@@ -239,29 +465,34 @@ mod imp {
 
             let (ram_pct, ram_used_gb, ram_total_gb) = read_ram();
 
-            let (disk_used_pct, disk_activity_pct) = if collect_disk {
-                let now = Instant::now();
-                let cap = match self.last_disk_cap {
-                    Some((v, at)) if now.duration_since(at) < Duration::from_secs(10) => Some(v),
-                    _ => {
-                        let v = read_system_drive_used_pct();
-                        if let Some(pct) = v {
-                            self.last_disk_cap = Some((pct, now));
-                        }
-                        v
+            let now = Instant::now();
+            let disk_cap = match self.last_disk_cap {
+                Some((v, at)) if now.duration_since(at) < Duration::from_secs(10) => Some(v),
+                _ => {
+                    let v = read_system_drive_usage();
+                    if let Some(cap) = v {
+                        self.last_disk_cap = Some((cap, now));
                     }
-                };
-                if self.pdh_disk.is_none() {
-                    self.pdh_disk = PdhDisk::new();
+                    v
                 }
-                let act = self.pdh_disk.as_mut().and_then(|p| p.sample());
-                (cap, act)
+            };
+            let (disk_used_pct, disk_used_gb, disk_total_gb) = match disk_cap {
+                Some((p, u, t)) => (Some(p), Some(u), Some(t)),
+                None => (None, None, None),
+            };
+
+            let disk_activity_pct = if collect_disk {
+                if self.pdh_disk.is_none() {
+                    self.pdh_disk = PdhCounter::new(w!("\\PhysicalDisk(_Total)\\% Disk Time"));
+                }
+                self.pdh_disk
+                    .as_mut()
+                    .and_then(|p| p.sample_scalar_double())
             } else {
-                (None, None)
+                None
             };
 
             let (net_down_bps, net_up_bps) = if collect_net {
-                let now = Instant::now();
                 if let Some((rx, tx)) = read_net_totals() {
                     let speeds = if let Some((prx, ptx, pat)) = self.prev_net {
                         let dt = now.duration_since(pat).as_secs_f64().max(0.05);
@@ -281,12 +512,96 @@ mod imp {
                 (0, 0)
             };
 
+            let mut cpu_temp_c: Option<f32> = None;
+            if let Some(therm) = self.pdh_thermal.as_mut() {
+                let mut best_temp: Option<f32> = None;
+                therm.sample_array(PDH_FMT_DOUBLE, |_, val| {
+                    let raw = unsafe { val.Anonymous.doubleValue };
+                    if !raw.is_finite() {
+                        return;
+                    }
+                    let c = if raw > 2000.0 {
+                        (raw / 10.0) - 273.15
+                    } else if raw > 200.0 {
+                        raw - 273.15
+                    } else {
+                        raw
+                    } as f32;
+                    if (5.0..=125.0).contains(&c) && best_temp.is_none_or(|b| c > b) {
+                        best_temp = Some(c);
+                    }
+                });
+                cpu_temp_c = best_temp;
+            }
+
+            let mut gpu_pct: Option<f32> = None;
+            if let Some(gpu_counter) = self.pdh_gpu_util.as_mut() {
+                let mut by_luid: HashMap<String, f64> = HashMap::new();
+                if gpu_counter.sample_array(PDH_FMT_DOUBLE, |name, val| {
+                    let v = unsafe { val.Anonymous.doubleValue };
+                    if v.is_finite() && v >= 0.0 {
+                        *by_luid
+                            .entry(extract_luid_key(name).to_owned())
+                            .or_default() += v;
+                    }
+                }) {
+                    gpu_pct = by_luid
+                        .into_values()
+                        .fold(None, |acc: Option<f64>, v| {
+                            Some(acc.map_or(v, |prev| prev.max(v)))
+                        })
+                        .map(|v| (v as f32).clamp(0.0, 100.0));
+                }
+            }
+
+            let mut gpu_vram_used_mb: Option<f32> = None;
+            if let Some(vram_counter) = self.pdh_gpu_vram.as_mut() {
+                let mut max_bytes: Option<i64> = None;
+                if vram_counter.sample_array(PDH_FMT_LARGE, |_, val| {
+                    let b = unsafe { val.Anonymous.largeValue };
+                    if b >= 0 && max_bytes.is_none_or(|m| b > m) {
+                        max_bytes = Some(b);
+                    }
+                }) {
+                    gpu_vram_used_mb = max_bytes.map(|b| (b as f64 / (1024.0 * 1024.0)) as f32);
+                }
+            }
+
+            let mut gpu_vram_total_mb = self.dxgi_vram_total_mb;
+            let mut gpu_temp_c: Option<f32> = None;
+
+            let nv = match self.nvidia_cache {
+                Some((cached, at)) if now.duration_since(at) < Duration::from_secs(2) => {
+                    Some(cached)
+                }
+                _ => {
+                    let fresh = read_nvidia_smi();
+                    if let Some(v) = fresh {
+                        self.nvidia_cache = Some((v, now));
+                    }
+                    fresh
+                }
+            };
+            if let Some(nv) = nv {
+                gpu_temp_c = nv.temp_c.or(gpu_temp_c);
+                gpu_pct = nv.util_pct.or(gpu_pct);
+                gpu_vram_used_mb = nv.vram_used_mb.or(gpu_vram_used_mb);
+                gpu_vram_total_mb = nv.vram_total_mb.or(gpu_vram_total_mb);
+            }
+
             SystemMetrics {
                 cpu_pct,
+                cpu_temp_c,
+                gpu_pct,
+                gpu_temp_c,
+                gpu_vram_used_mb,
+                gpu_vram_total_mb,
                 ram_pct,
                 ram_used_gb,
                 ram_total_gb,
                 disk_used_pct,
+                disk_used_gb,
+                disk_total_gb,
                 disk_activity_pct,
                 net_down_bps,
                 net_up_bps,
@@ -298,17 +613,22 @@ mod imp {
 
 #[cfg(target_os = "linux")]
 mod imp {
+    use std::collections::{HashMap, HashSet};
     use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
     use std::time::{Duration, Instant};
 
-    use super::{SystemMetrics, compute_cpu_delta};
+    use super::{GpuSample, SystemMetrics, compute_cpu_delta, parse_nvidia_smi_csv};
     use crate::battery::read_battery;
 
     pub struct Sampler {
         prev_cpu: Option<(u64, u64, u64)>,
         prev_disk: Option<(u64, u64, Instant)>,
         prev_net: Option<(u64, u64, Instant)>,
-        disk_capacity: Option<(Instant, f32)>,
+        disk_capacity: Option<(Instant, f32, f32, f32)>,
+        cpu_temp_sensor: Option<(Instant, Option<PathBuf>)>,
+        gpu_cache: Option<(Instant, GpuSample)>,
     }
 
     impl Sampler {
@@ -318,6 +638,8 @@ mod imp {
                 prev_disk: None,
                 prev_net: None,
                 disk_capacity: None,
+                cpu_temp_sensor: None,
+                gpu_cache: None,
             }
         }
 
@@ -333,6 +655,7 @@ mod imp {
                 }
                 self.prev_cpu = Some(curr);
             }
+            out.cpu_temp_c = self.read_cpu_temp();
 
             let (total_kb, avail_kb) = read_meminfo().unwrap_or((0, 0));
             if total_kb > 0 {
@@ -342,14 +665,21 @@ mod imp {
                 out.ram_pct = (used_kb as f32 / total_kb as f32 * 100.0).clamp(0.0, 100.0);
             }
 
+            // Always sample storage capacity (10s cached) so System & Home tabs display real usage
+            // even when taskbar_show_disk is false.
+            let recently_cached = self
+                .disk_capacity
+                .is_some_and(|(at, ..)| at.elapsed() < Duration::from_secs(10));
+            if !recently_cached && let Some((pct, used_gb, total_gb)) = disk_capacity() {
+                self.disk_capacity = Some((Instant::now(), pct, used_gb, total_gb));
+            }
+            if let Some((_, pct, used_gb, total_gb)) = self.disk_capacity {
+                out.disk_used_pct = Some(pct);
+                out.disk_used_gb = Some(used_gb);
+                out.disk_total_gb = Some(total_gb);
+            }
+
             if collect_disk {
-                let recently_cached = self
-                    .disk_capacity
-                    .is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(10));
-                if !recently_cached {
-                    self.disk_capacity = disk_capacity_pct().map(|pct| (Instant::now(), pct));
-                }
-                out.disk_used_pct = self.disk_capacity.map(|(_, pct)| pct);
                 if let Some((read_ticks, write_ticks)) = disk_io_ticks() {
                     let now = Instant::now();
                     if let Some((prev_r, prev_w, prev_at)) = self.prev_disk {
@@ -379,8 +709,270 @@ mod imp {
                 self.prev_net = None;
             }
 
+            let (gpu_temp, gpu_pct, vram_used, vram_total) = self.read_gpu_metrics();
+            out.gpu_temp_c = gpu_temp;
+            out.gpu_pct = gpu_pct;
+            out.gpu_vram_used_mb = vram_used;
+            out.gpu_vram_total_mb = vram_total;
+
             out
         }
+
+        fn read_cpu_temp(&mut self) -> Option<f32> {
+            let need_discover = self
+                .cpu_temp_sensor
+                .as_ref()
+                .is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(30));
+            if need_discover {
+                let path = discover_cpu_temp_sensor();
+                self.cpu_temp_sensor = Some((Instant::now(), path));
+            }
+            let path = self.cpu_temp_sensor.as_ref()?.1.as_ref()?;
+            if let Some(temp) = read_sysfs_temp_c(path) {
+                return Some(temp);
+            }
+            self.cpu_temp_sensor = None;
+            None
+        }
+
+        fn read_gpu_metrics(&mut self) -> (Option<f32>, Option<f32>, Option<f32>, Option<f32>) {
+            let (mut temp, mut util, mut vram_used, mut vram_total, has_nvidia_active) =
+                read_drm_sysfs_gpu();
+
+            let need_nvidia = has_nvidia_active || (util.is_none() && temp.is_none());
+            if need_nvidia {
+                let cached = self
+                    .gpu_cache
+                    .as_ref()
+                    .filter(|(at, _)| at.elapsed() < Duration::from_secs(2))
+                    .map(|(_, data)| *data);
+                let nv = match cached {
+                    Some(v) => Some(v),
+                    None => {
+                        let fresh = read_nvidia_smi();
+                        if let Some(v) = fresh {
+                            self.gpu_cache = Some((Instant::now(), v));
+                        }
+                        fresh
+                    }
+                };
+                if let Some(nv) = nv {
+                    temp = nv.temp_c.or(temp);
+                    util = nv.util_pct.or(util);
+                    vram_used = nv.vram_used_mb.or(vram_used);
+                    vram_total = nv.vram_total_mb.or(vram_total);
+                }
+            }
+            (temp, util, vram_used, vram_total)
+        }
+    }
+
+    pub(crate) fn parse_sysfs_millidegrees(raw: &str) -> Option<f32> {
+        let val = raw.trim().parse::<f32>().ok()?;
+        if !val.is_finite() {
+            return None;
+        }
+        let c = if val > 250.0 { val / 1000.0 } else { val };
+        (5.0..=125.0).contains(&c).then_some(c)
+    }
+
+    fn read_sysfs_temp_c(path: &Path) -> Option<f32> {
+        let raw = fs::read_to_string(path).ok()?;
+        parse_sysfs_millidegrees(&raw)
+    }
+
+    fn discover_cpu_temp_sensor() -> Option<PathBuf> {
+        let mut best: Option<(u8, PathBuf)> = None;
+        if let Ok(entries) = fs::read_dir("/sys/class/hwmon") {
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                let name = fs::read_to_string(dir.join("name"))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase();
+                let driver_prio = if matches!(
+                    name.as_str(),
+                    "coretemp" | "k10temp" | "zenpower" | "cpu_thermal" | "cros_ec"
+                ) {
+                    30
+                } else if matches!(name.as_str(), "thinkpad" | "dell_smm" | "asus-ec-sensors")
+                    || name.starts_with("nct")
+                    || name.starts_with("it87")
+                {
+                    20
+                } else if name == "acpitz" {
+                    5
+                } else {
+                    0
+                };
+                if driver_prio == 0 {
+                    continue;
+                }
+                for idx in 1..=12u8 {
+                    let input = dir.join(format!("temp{idx}_input"));
+                    if !input.is_file() || read_sysfs_temp_c(&input).is_none() {
+                        continue;
+                    }
+                    let label = fs::read_to_string(dir.join(format!("temp{idx}_label")))
+                        .unwrap_or_default()
+                        .trim()
+                        .to_ascii_lowercase();
+                    let label_bonus = if label.contains("package")
+                        || label.contains("tctl")
+                        || label.contains("tdie")
+                        || label == "cpu"
+                    {
+                        9
+                    } else if label.contains("core 0") || idx == 1 {
+                        5
+                    } else {
+                        1
+                    };
+                    let score = driver_prio + label_bonus;
+                    if best.as_ref().is_none_or(|(b, _)| score > *b) {
+                        best = Some((score, input));
+                    }
+                }
+            }
+        }
+        if let Some((_, p)) = best {
+            return Some(p);
+        }
+
+        if let Ok(entries) = fs::read_dir("/sys/class/thermal") {
+            let mut zbest: Option<(u8, PathBuf)> = None;
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                if !dir
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|n| n.starts_with("thermal_zone"))
+                {
+                    continue;
+                }
+                let ttype = fs::read_to_string(dir.join("type"))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase();
+                let score = if ttype.contains("x86_pkg_temp") {
+                    20
+                } else if ttype.contains("cpu") || ttype.contains("soc") {
+                    15
+                } else if ttype.contains("acpitz") {
+                    5
+                } else {
+                    1
+                };
+                let temp_path = dir.join("temp");
+                if temp_path.is_file()
+                    && read_sysfs_temp_c(&temp_path).is_some()
+                    && zbest.as_ref().is_none_or(|(b, _)| score > *b)
+                {
+                    zbest = Some((score, temp_path));
+                }
+            }
+            if let Some((_, p)) = zbest {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    fn read_drm_sysfs_gpu() -> (Option<f32>, Option<f32>, Option<f32>, Option<f32>, bool) {
+        let mut temp: Option<f32> = None;
+        let mut util: Option<f32> = None;
+        let mut vram_used: Option<f32> = None;
+        let mut vram_total: Option<f32> = None;
+        let mut nvidia_active = false;
+
+        let Ok(entries) = fs::read_dir("/sys/class/drm") else {
+            return (None, None, None, None, false);
+        };
+        for entry in entries.flatten() {
+            let fname = entry.file_name();
+            let name_str = fname.to_string_lossy();
+            if !name_str.starts_with("card") || name_str.contains('-') {
+                continue;
+            }
+            let dev = entry.path().join("device");
+            let vendor = fs::read_to_string(dev.join("vendor")).unwrap_or_default();
+            if vendor.trim().eq_ignore_ascii_case("0x10de") {
+                let rt = fs::read_to_string(dev.join("power/runtime_status")).unwrap_or_default();
+                if rt.trim() != "suspended" {
+                    nvidia_active = true;
+                }
+            }
+            if util.is_none()
+                && let Ok(raw) = fs::read_to_string(dev.join("gpu_busy_percent"))
+                && let Ok(v) = raw.trim().parse::<f32>()
+                && v.is_finite()
+            {
+                util = Some(v.clamp(0.0, 100.0));
+            }
+            if vram_used.is_none()
+                && let Ok(raw) = fs::read_to_string(dev.join("mem_info_vram_used"))
+                && let Ok(bytes) = raw.trim().parse::<u64>()
+            {
+                vram_used = Some((bytes as f64 / 1_048_576.0) as f32);
+            }
+            if vram_total.is_none()
+                && let Ok(raw) = fs::read_to_string(dev.join("mem_info_vram_total"))
+                && let Ok(bytes) = raw.trim().parse::<u64>()
+                && bytes > 0
+            {
+                vram_total = Some((bytes as f64 / 1_048_576.0) as f32);
+            }
+            if temp.is_none()
+                && let Ok(hwmons) = fs::read_dir(dev.join("hwmon"))
+            {
+                for hw in hwmons.flatten() {
+                    if let Some(t) = read_sysfs_temp_c(&hw.path().join("temp1_input")) {
+                        temp = Some(t);
+                        break;
+                    }
+                }
+            }
+        }
+        (temp, util, vram_used, vram_total, nvidia_active)
+    }
+
+    fn find_nvidia_smi() -> Option<PathBuf> {
+        static CACHE: OnceLock<Option<PathBuf>> = OnceLock::new();
+        CACHE
+            .get_or_init(|| {
+                for cand in ["/usr/bin/nvidia-smi", "nvidia-smi"] {
+                    if cand.starts_with('/') && !Path::new(cand).is_file() {
+                        continue;
+                    }
+                    if let Ok(out) = std::process::Command::new(cand)
+                        .args([
+                            "--query-gpu=temperature.gpu",
+                            "--format=csv,noheader,nounits",
+                        ])
+                        .output()
+                        && out.status.success()
+                    {
+                        return Some(PathBuf::from(cand));
+                    }
+                }
+                None
+            })
+            .clone()
+    }
+
+    fn read_nvidia_smi() -> Option<GpuSample> {
+        let exe = find_nvidia_smi()?;
+        let out = std::process::Command::new(exe)
+            .args([
+                "--query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        parse_nvidia_smi_csv(&String::from_utf8_lossy(&out.stdout))
     }
 
     fn read_cpu_ticks() -> Option<(u64, u64, u64)> {
@@ -397,10 +989,6 @@ mod imp {
             .collect::<Option<Vec<_>>>()?;
         let user = vals.first().copied()? + vals.get(1).copied().unwrap_or(0);
         let idle = vals.get(3).copied()? + vals.get(4).copied().unwrap_or(0);
-        // `compute_cpu_delta` expects Windows-style values where the second tuple member is
-        // total CPU time (including idle). Linux `/proc/stat` splits idle out, so fold it back
-        // into the total while keeping the idle slice separate for the busy calculation.
-        // `guest` / `guest_nice` are already included in user / nice and must not double count.
         let total = vals
             .iter()
             .copied()
@@ -442,47 +1030,120 @@ mod imp {
         Some((total, avail.min(total)))
     }
 
-    /// Aggregate all mounted real filesystems instead of only `/`, so separate `/home`,
-    /// `/var` and other system folders are included in the usage percentage.
-    fn disk_capacity_pct() -> Option<f32> {
-        let out = std::process::Command::new("df")
-            .args(["-P", "-k"])
-            .output()
-            .ok()?;
-        let text = String::from_utf8_lossy(&out.stdout);
-        parse_df_capacity(&text)
+    fn parse_proc_mounts_fstypes(text: &str) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for line in text.lines() {
+            let mut parts = line.split_whitespace();
+            let Some(_src) = parts.next() else { continue };
+            let Some(mount) = parts.next() else { continue };
+            let Some(fstype) = parts.next() else { continue };
+            let unescaped = mount.replace("\\040", " ");
+            map.insert(unescaped, fstype.to_owned());
+        }
+        map
     }
 
-    pub(crate) fn parse_df_capacity(text: &str) -> Option<f32> {
+    fn statvfs_root() -> Option<(f32, f32, f32)> {
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        let rc = unsafe { libc::statvfs(c"/".as_ptr(), &mut st) };
+        if rc != 0 || st.f_blocks == 0 || st.f_frsize == 0 {
+            return None;
+        }
+        let bsize = u128::from(st.f_frsize);
+        let total_b = u128::from(st.f_blocks) * bsize;
+        let free_b = u128::from(st.f_bfree) * bsize;
+        let avail_b = u128::from(st.f_bavail) * bsize;
+        let used_b = total_b.saturating_sub(free_b);
+        let denom = used_b.saturating_add(avail_b).max(1);
+        let pct = ((used_b as f64 / denom as f64) * 100.0).clamp(0.0, 100.0) as f32;
+        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+        Some((
+            pct,
+            (used_b as f64 / GIB) as f32,
+            (total_b as f64 / GIB) as f32,
+        ))
+    }
+
+    /// Aggregate unique backing filesystems via POSIX `df -P -k` + `/proc/mounts` fstype filtering,
+    /// deduplicating Btrfs/bind subvolumes and excluding pseudo/loop/AppImage mounts, with a direct
+    /// `statvfs("/")` fallback when `df` cannot inspect `/` (e.g. sandboxed environments).
+    fn disk_capacity() -> Option<(f32, f32, f32)> {
+        let mounts_raw = fs::read_to_string("/proc/mounts").unwrap_or_default();
+        let fstypes = parse_proc_mounts_fstypes(&mounts_raw);
+        let out = std::process::Command::new("df")
+            .args(["-P", "-k"])
+            .env("LC_ALL", "C")
+            .output()
+            .ok();
+        if let Some(out) = out
+            && out.status.success()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(res) = parse_df_capacity_with_fs(&text, &fstypes) {
+                return Some(res);
+            }
+        }
+        statvfs_root()
+    }
+
+    pub(crate) fn parse_df_capacity_with_fs(
+        text: &str,
+        fstypes: &HashMap<String, String>,
+    ) -> Option<(f32, f32, f32)> {
+        const PSEUDO_FS: &[&str] = &[
+            "tmpfs",
+            "devtmpfs",
+            "proc",
+            "sysfs",
+            "devpts",
+            "cgroup",
+            "cgroup2",
+            "mqueue",
+            "hugetlbfs",
+            "securityfs",
+            "pstore",
+            "debugfs",
+            "tracefs",
+            "bpf",
+            "configfs",
+            "fusectl",
+            "efivarfs",
+            "ramfs",
+            "autofs",
+            "binfmt_misc",
+            "nsfs",
+            "squashfs",
+            "overlay",
+            "iso9660",
+            "fuse.AppImage",
+            "fuse.portal",
+            "fuse.gvfsd-fuse",
+        ];
+
         let mut total_kb = 0_u64;
         let mut used_kb = 0_u64;
+        let mut seen_devs: HashSet<&str> = HashSet::new();
         let mut found = false;
+
         for line in text.lines().skip(1) {
             let cols = line.split_whitespace().collect::<Vec<_>>();
             if cols.len() < 6 {
                 continue;
             }
             let fs = cols[0];
-            // Pseudo filesystems have no backing storage and would skew a whole-system total.
-            if [
-                "tmpfs",
-                "devtmpfs",
-                "proc",
-                "sysfs",
-                "devpts",
-                "cgroup",
-                "cgroup2",
-                "mqueue",
-                "hugetlbfs",
-                "securityfs",
-                "pstore",
-                "debugfs",
-                "tracefs",
-                "bpf",
-                "configfs",
-                "fusectl",
-            ]
-            .contains(&fs)
+            let mount = cols[5..].join(" ");
+            if PSEUDO_FS.contains(&fs)
+                || fs.starts_with("/dev/loop")
+                || fs.starts_with("/dev/zram")
+                || fs.ends_with(".AppImage")
+                || fs.contains(".AppImage")
+                || mount.starts_with("/tmp/.mount_")
+                || mount.starts_with("/snap/")
+            {
+                continue;
+            }
+            if let Some(fstype) = fstypes.get(&mount)
+                && PSEUDO_FS.contains(&fstype.as_str())
             {
                 continue;
             }
@@ -492,6 +1153,13 @@ mod imp {
             let Some(used) = cols[2].parse::<u64>().ok() else {
                 continue;
             };
+            if total == 0 {
+                continue;
+            }
+            if fs.starts_with('/') && !seen_devs.insert(fs) {
+                // Btrfs subvolumes (@, @home, @var) or bind mounts share one partition; count once.
+                continue;
+            }
             total_kb = total_kb.saturating_add(total);
             used_kb = used_kb.saturating_add(used);
             found = true;
@@ -499,7 +1167,17 @@ mod imp {
         if !found || total_kb == 0 {
             return None;
         }
-        Some((used_kb as f32 / total_kb as f32 * 100.0).clamp(0.0, 100.0))
+        let pct = (used_kb as f64 / total_kb as f64 * 100.0).clamp(0.0, 100.0) as f32;
+        Some((
+            pct,
+            (used_kb as f64 / 1_048_576.0) as f32,
+            (total_kb as f64 / 1_048_576.0) as f32,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn parse_df_capacity(text: &str) -> Option<f32> {
+        parse_df_capacity_with_fs(text, &HashMap::new()).map(|(pct, _, _)| pct)
     }
 
     fn disk_io_ticks() -> Option<(u64, u64)> {
@@ -579,17 +1257,48 @@ mod imp {
             assert!(metrics.ram_total_gb > 0.0);
             assert!(metrics.ram_pct.is_finite());
             assert!(metrics.cpu_pct.is_finite());
+            assert!(metrics.disk_used_pct.is_some());
         }
 
         #[test]
         fn linux_df_capacity_aggregates_system_mounts_and_skips_pseudo_filesystems() {
-            // Shortened POSIX `df -P -k` output: root plus a separate /home mount.
+            // Shortened POSIX `df -P -k` output: root plus a separate /home mount, plus Btrfs
+            // duplicate subvolume on /dev/sda1 and AppImage mount that must not skew totals.
             let text = "Filesystem 1024-blocks Used Available Capacity Mounted on\n\
                         /dev/sda1 100000 40000 60000 40% /\n\
+                        /dev/sda1 100000 40000 60000 40% /var/log\n\
                         tmpfs 10000 8000 2000 80% /dev/shm\n\
+                        Liebert_Dynamic_Island-0.2.0-x86_64.AppImage 5632 5632 0 100% /tmp/.mount_Lieber\n\
                         /dev/sdb1 200000 100000 100000 50% /home\n";
             let pct = super::parse_df_capacity(text).expect("capacity");
             assert!((pct - 46.666_668).abs() < 0.01, "unexpected {pct}");
+        }
+
+        #[test]
+        fn parses_sysfs_millidegrees_and_nvidia_smi() {
+            assert_eq!(parse_sysfs_millidegrees("54000\n"), Some(54.0));
+            assert_eq!(parse_sysfs_millidegrees("42"), Some(42.0));
+            assert_eq!(parse_sysfs_millidegrees("0"), None);
+
+            let nv = parse_nvidia_smi_csv("39, 3, 1432, 2048\n").expect("nvidia row");
+            assert_eq!(
+                nv,
+                GpuSample {
+                    temp_c: Some(39.0),
+                    util_pct: Some(3.0),
+                    vram_used_mb: Some(1432.0),
+                    vram_total_mb: Some(2048.0),
+                }
+            );
+            assert_eq!(
+                parse_nvidia_smi_csv("[N/A], 15, [Not Supported], 4096"),
+                Some(GpuSample {
+                    temp_c: None,
+                    util_pct: Some(15.0),
+                    vram_used_mb: None,
+                    vram_total_mb: Some(4096.0),
+                })
+            );
         }
     }
 }
@@ -626,6 +1335,7 @@ pub fn spawn_sysmon_worker(
 ) {
     std::thread::Builder::new()
         .name("sysmon-worker".to_owned())
+        .stack_size(128 * 1024)
         .spawn(move || {
             let mut enabled = initial_enabled;
             let mut interval_ms = initial_interval_ms.clamp(500, 5000);
@@ -634,34 +1344,19 @@ pub fn spawn_sysmon_worker(
             let mut sampler = imp::Sampler::new();
 
             loop {
-                if enabled {
-                    let metrics = sampler.sample(collect_disk, collect_net);
-                    if event_tx
-                        .send(PlatformEvent::SystemMetrics(metrics))
-                        .is_err()
-                    {
-                        break;
-                    }
-                    on_wake();
-                } else {
-                    // Still poll battery infrequently when taskbar monitor is off so low-battery alerts work.
-                    let metrics = SystemMetrics {
-                        battery: read_battery(),
-                        ..Default::default()
-                    };
-                    if event_tx
-                        .send(PlatformEvent::SystemMetrics(metrics))
-                        .is_err()
-                    {
-                        break;
-                    }
-                    on_wake();
+                let metrics = sampler.sample(enabled && collect_disk, enabled && collect_net);
+                if event_tx
+                    .send(PlatformEvent::SystemMetrics(metrics))
+                    .is_err()
+                {
+                    break;
                 }
+                on_wake();
 
                 let wait = if enabled {
                     Duration::from_millis(interval_ms)
                 } else {
-                    Duration::from_secs(10)
+                    Duration::from_secs(4)
                 };
 
                 match cmd_rx.recv_timeout(wait) {
@@ -695,9 +1390,26 @@ mod tests {
     }
 
     #[test]
-    fn format_speed_scales_units() {
+    fn format_speed_and_vram_scale_units() {
         assert_eq!(format_speed_bps(512), "512B");
         assert_eq!(format_speed_bps(15 * 1024), "15K");
         assert_eq!(format_speed_bps(2_621_440), "2.5M");
+        assert_eq!(format_vram_mb(512.0, Some(1024.0)), "0.5/1.0G");
+        assert_eq!(format_vram_mb(420.0, Some(512.0)), "420/512M");
+    }
+
+    #[test]
+    fn parses_nvidia_csv_rows() {
+        let parsed = parse_nvidia_smi_csv("44, 12, 1200, 8192\n51, 68, 3072, 8192\n")
+            .expect("picks busiest gpu");
+        assert_eq!(
+            parsed,
+            GpuSample {
+                temp_c: Some(51.0),
+                util_pct: Some(68.0),
+                vram_used_mb: Some(3072.0),
+                vram_total_mb: Some(8192.0),
+            }
+        );
     }
 }

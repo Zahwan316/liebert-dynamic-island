@@ -2,7 +2,9 @@
 
 mod battery;
 mod calendar;
+mod calendar_types;
 mod clock;
+mod clock_light;
 mod config;
 mod daemon;
 mod ipc;
@@ -35,6 +37,7 @@ use crate::ui::{AppChannels, SettingsIpcTarget, UiControlEvent};
 use crate::ui::{IslandApp, WINDOW_TITLE};
 
 fn main() -> ExitCode {
+    platform::configure_low_ram_allocator();
     let args: Vec<String> = std::env::args().collect();
 
     if args.iter().any(|a| a == "--spike-notifications") {

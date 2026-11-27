@@ -8,7 +8,7 @@ use crate::ui::soft_render::SoftCanvas;
 use crate::ui::{SETTINGS_WINDOW_TITLE, StandaloneSettingsApp};
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{EventLoop, LoopHandle, RegistrationToken};
-use eframe::egui::{
+use egui::{
     self, Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, PointerButton, Pos2, RawInput,
     Rect, TouchPhase, Vec2, ViewportId, ViewportInfo,
 };
@@ -43,10 +43,10 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const INITIAL_WIDTH_PT: u32 = 900;
-const INITIAL_HEIGHT_PT: u32 = 620;
-const MIN_WIDTH_PT: u32 = 540;
-const MIN_HEIGHT_PT: u32 = 440;
+const INITIAL_WIDTH_PT: u32 = 760;
+const INITIAL_HEIGHT_PT: u32 = 520;
+const MIN_WIDTH_PT: u32 = 520;
+const MIN_HEIGHT_PT: u32 = 400;
 const CSD_BAR_HEIGHT_PT: f32 = 30.0;
 const MAX_SHM_TEXTURE_SIDE: usize = 1024;
 
@@ -279,7 +279,10 @@ impl WaylandSettingsState {
                 pool
             }
             None => match SlotPool::new(target_pool_bytes, &self.shm) {
-                Ok(pool) => self.pool.insert(pool),
+                Ok(pool) => {
+                    crate::platform::light::trim_heap();
+                    self.pool.insert(pool)
+                }
                 Err(_) => return,
             },
         };

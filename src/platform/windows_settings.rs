@@ -5,7 +5,7 @@
 
 use crate::ui::soft_render::SoftCanvas;
 use crate::ui::{SETTINGS_WINDOW_TITLE, StandaloneSettingsApp};
-use eframe::egui::{
+use egui::{
     self, CursorIcon, Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, PointerButton, Pos2,
     RawInput, Rect, TouchPhase, Vec2, ViewportId, ViewportInfo,
 };
@@ -40,10 +40,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
-const INITIAL_WIDTH_PT: i32 = 900;
-const INITIAL_HEIGHT_PT: i32 = 620;
-const MIN_WIDTH_PT: i32 = 540;
-const MIN_HEIGHT_PT: i32 = 440;
+const INITIAL_WIDTH_PT: i32 = 760;
+const INITIAL_HEIGHT_PT: i32 = 520;
+const MIN_WIDTH_PT: i32 = 520;
+const MIN_HEIGHT_PT: i32 = 400;
 const MAX_DIB_TEXTURE_SIDE: usize = 1024;
 const REPAINT_TIMER_ID: usize = 1;
 const WM_MOUSELEAVE_MSG: u32 = 0x02A3;

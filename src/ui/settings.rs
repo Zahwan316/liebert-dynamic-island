@@ -2,92 +2,24 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
-use eframe::egui::{
+use egui::{
     self, Color32, CornerRadius, CursorIcon, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2,
     ViewportBuilder, ViewportId,
 };
 
 use crate::battery::{format_remaining, read_battery};
-use crate::calendar::{
+use crate::calendar_types::{
     CalendarCommand, CalendarEvent, format_countdown, format_local_time, upcoming_events,
 };
-use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
+use crate::clock_light::{format_clock, is_valid_timezone};
 use crate::config::{
-    BackgroundMaterial, Config, IdleDisplayMode, KaraokeLyricMode, TaskbarFormat, TaskbarPosition,
-    TextAlign,
+    BackgroundMaterial, COMMON_TIMEZONES, Config, IdleDisplayMode, KaraokeLyricMode,
+    TRANSLATE_LANGUAGES, TaskbarFormat, TaskbarPosition, TextAlign,
 };
-use crate::lyrics::TRANSLATE_LANGUAGES;
-use crate::platform::InstalledFont;
+use crate::platform::light::{self as platform_light, InstalledFont};
 use crate::todo::TodoStore;
-use crate::ui::icons::{IconKind, icon_button, paint_icon, paint_mascot};
-
-pub const SETTINGS_WINDOW_TITLE: &str = "Liebert Dynamic Island — Settings";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsTab {
-    Appearance,
-    Lyrics,
-    Features,
-    System,
-    Battery,
-    Todo,
-    Calendar,
-    About,
-}
-
-impl SettingsTab {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Appearance => "Display",
-            Self::Lyrics => "Lyrics",
-            Self::Features => "Features",
-            Self::System => "System",
-            Self::Battery => "Battery",
-            Self::Todo => "Tasks",
-            Self::Calendar => "Calendar",
-            Self::About => "About",
-        }
-    }
-
-    fn subtitle(self) -> &'static str {
-        match self {
-            Self::Appearance => "Island surface, glass material, mascot, clock & typography",
-            Self::Lyrics => "Media sync, karaoke highlight, romaji & translation",
-            Self::Features => "Auto-hide, fullscreen rules, notifications & Pomodoro",
-            Self::System => "OS startup & taskbar system monitor layout",
-            Self::Battery => "Device power telemetry & low-battery alerts",
-            Self::Todo => "Local quick checklist stored in todos.toml",
-            Self::Calendar => "Google Calendar secret .ics sync & upcoming schedule",
-            Self::About => "Creator, application version, license & runtime info",
-        }
-    }
-
-    fn icon(self) -> IconKind {
-        match self {
-            Self::Appearance => IconKind::Settings,
-            Self::Lyrics => IconKind::MusicNote,
-            Self::Features => IconKind::Timer,
-            Self::System => IconKind::Cpu,
-            Self::Battery => IconKind::Dot,
-            Self::Todo => IconKind::TodoCheck,
-            Self::Calendar => IconKind::Calendar,
-            Self::About => IconKind::Info,
-        }
-    }
-
-    fn all() -> [Self; 8] {
-        [
-            Self::Appearance,
-            Self::Lyrics,
-            Self::Features,
-            Self::System,
-            Self::Battery,
-            Self::Todo,
-            Self::Calendar,
-            Self::About,
-        ]
-    }
-}
+pub use crate::ui::icons::SETTINGS_WINDOW_TITLE;
+use crate::ui::icons::{IconKind, SettingsTab, icon_button, paint_icon, paint_mascot};
 
 pub struct SettingsWindowState<'a> {
     pub open: &'a mut bool,
@@ -129,192 +61,7 @@ fn shared_settings_state() -> &'static Arc<Mutex<Option<DeferredSettingsState>>>
     STATE.get_or_init(|| Arc::new(Mutex::new(None)))
 }
 
-pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>) {
-    let shared = Arc::clone(shared_settings_state());
-    {
-        let Ok(mut guard) = shared.lock() else {
-            return;
-        };
-        if let Some(ds) = guard.as_mut() {
-            if ds.dirty_from_ui {
-                *st.open = ds.open;
-                *st.focus_requested = ds.focus_requested;
-                *st.tab = ds.tab;
-                *st.config = ds.config.clone();
-                *st.todos = ds.todos.clone();
-                *st.new_todo_input = ds.new_todo_input.clone();
-                *st.calendar_url_input = ds.calendar_url_input.clone();
-                *st.installed_fonts = ds.installed_fonts.clone();
-                *st.font_search = ds.font_search.clone();
-                if ds.config_dirty_out {
-                    *st.config_dirty = true;
-                }
-                if ds.test_notif_out {
-                    *st.test_notification_requested = true;
-                }
-                ds.dirty_from_ui = false;
-                ds.config_dirty_out = false;
-                ds.test_notif_out = false;
-            }
-            if !*st.open {
-                *guard = None;
-                return;
-            }
-            ds.open = *st.open;
-            ds.focus_requested = *st.focus_requested;
-            ds.tab = *st.tab;
-            ds.config = st.config.clone();
-            ds.todos = st.todos.clone();
-            ds.new_todo_input = st.new_todo_input.clone();
-            ds.calendar_url_input = st.calendar_url_input.clone();
-            if ds.calendar_status != st.calendar_status
-                || ds.calendar_events.len() != st.calendar_events.len()
-            {
-                ds.calendar_events = st.calendar_events.to_vec();
-                ds.calendar_status = st.calendar_status.to_owned();
-            }
-            ds.calendar_cmd_tx = st.calendar_cmd_tx.clone();
-            if ds.installed_fonts.is_none() && st.installed_fonts.is_some() {
-                ds.installed_fonts = st.installed_fonts.clone();
-            }
-            ds.font_search = st.font_search.clone();
-        } else {
-            if !*st.open {
-                return;
-            }
-            *guard = Some(DeferredSettingsState {
-                open: *st.open,
-                focus_requested: *st.focus_requested,
-                tab: *st.tab,
-                config: st.config.clone(),
-                todos: st.todos.clone(),
-                new_todo_input: st.new_todo_input.clone(),
-                calendar_url_input: st.calendar_url_input.clone(),
-                calendar_events: st.calendar_events.to_vec(),
-                calendar_status: st.calendar_status.to_owned(),
-                calendar_cmd_tx: st.calendar_cmd_tx.clone(),
-                installed_fonts: st.installed_fonts.clone(),
-                font_search: st.font_search.clone(),
-                dirty_from_ui: false,
-                config_dirty_out: false,
-                test_notif_out: false,
-            });
-        }
-    }
-
-    let root_ctx = ctx.clone();
-    ctx.show_viewport_deferred(
-        ViewportId::from_hash_of("liebert_settings"),
-        ViewportBuilder::default()
-            .with_title(SETTINGS_WINDOW_TITLE)
-            .with_app_id("liebert-dynamic-island-settings")
-            .with_inner_size([680.0, 560.0])
-            .with_active(true)
-            .with_resizable(true),
-        move |ui, _class| {
-            let Ok(mut guard) = shared.lock() else {
-                return;
-            };
-            let Some(ds) = guard.as_mut() else {
-                return;
-            };
-            if !ds.open {
-                return;
-            }
-            if ui.input(|i| i.viewport().close_requested()) {
-                ds.open = false;
-                ds.focus_requested = false;
-                ds.dirty_from_ui = true;
-                root_ctx.request_repaint();
-                return;
-            }
-            if ds.focus_requested {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
-                ds.focus_requested = false;
-                ds.dirty_from_ui = true;
-            }
-
-            apply_settings_theme(ui, ds.config.accent_color);
-            let panel_frame = egui::Frame::new()
-                .fill(settings_panel_fill(&ds.config))
-                .inner_margin(egui::Margin::same(10));
-
-            let mut local_config_dirty = false;
-            let mut local_todos_dirty = false;
-            let mut local_test_notif = false;
-            let prev_tab = ds.tab;
-            let prev_new_todo = ds.new_todo_input.clone();
-            let prev_cal_url = ds.calendar_url_input.clone();
-            let prev_font_search = ds.font_search.clone();
-            let prev_todo_len = ds.todos.items.len();
-
-            egui::CentralPanel::default()
-                .frame(panel_frame)
-                .show(ui, |ui| {
-                    let ds = &mut *ds;
-                    render_settings_tabs_body(
-                        ui,
-                        &mut SettingsBodyState {
-                            tab: &mut ds.tab,
-                            config: &mut ds.config,
-                            todos: &mut ds.todos,
-                            new_todo_input: &mut ds.new_todo_input,
-                            calendar_url_input: &mut ds.calendar_url_input,
-                            calendar_events: &ds.calendar_events,
-                            calendar_status: &ds.calendar_status,
-                            calendar_cmd_tx: Some(&ds.calendar_cmd_tx),
-                            config_dirty: &mut local_config_dirty,
-                            todos_dirty: &mut local_todos_dirty,
-                            test_notification_requested: &mut local_test_notif,
-                            calendar_set_url_requested: &mut None,
-                            calendar_refresh_requested: &mut false,
-                            installed_fonts: &mut ds.installed_fonts,
-                            font_search: &mut ds.font_search,
-                        },
-                    );
-                });
-
-            if local_config_dirty
-                || local_todos_dirty
-                || local_test_notif
-                || ds.tab != prev_tab
-                || ds.new_todo_input != prev_new_todo
-                || ds.calendar_url_input != prev_cal_url
-                || ds.font_search != prev_font_search
-                || ds.todos.items.len() != prev_todo_len
-            {
-                ds.config_dirty_out |= local_config_dirty;
-                ds.test_notif_out |= local_test_notif;
-                ds.dirty_from_ui = true;
-                root_ctx.request_repaint();
-            }
-        },
-    );
-}
-
-struct SettingsBodyState<'a> {
-    tab: &'a mut SettingsTab,
-    config: &'a mut Config,
-    todos: &'a mut TodoStore,
-    new_todo_input: &'a mut String,
-    calendar_url_input: &'a mut String,
-    calendar_events: &'a [CalendarEvent],
-    calendar_status: &'a str,
-    calendar_cmd_tx: Option<&'a mpsc::Sender<CalendarCommand>>,
-    config_dirty: &'a mut bool,
-    todos_dirty: &'a mut bool,
-    test_notification_requested: &'a mut bool,
-    calendar_set_url_requested: &'a mut Option<String>,
-    calendar_refresh_requested: &'a mut bool,
-    installed_fonts: &'a mut Option<Vec<InstalledFont>>,
-    font_search: &'a mut String,
-}
-
-fn settings_panel_fill(config: &Config) -> Color32 {
+pub(crate) fn settings_panel_fill(config: &Config) -> Color32 {
     let wayland_alpha = cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some();
     match config.background_material {
         BackgroundMaterial::Solid => Color32::from_rgb(14, 15, 19),
@@ -604,7 +351,25 @@ fn pill_toggle_chip(
     .on_hover_cursor(CursorIcon::PointingHand)
 }
 
-fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
+pub(crate) struct SettingsBodyState<'a> {
+    pub tab: &'a mut SettingsTab,
+    pub config: &'a mut Config,
+    pub todos: &'a mut TodoStore,
+    pub new_todo_input: &'a mut String,
+    pub calendar_url_input: &'a mut String,
+    pub calendar_events: &'a [CalendarEvent],
+    pub calendar_status: &'a str,
+    pub calendar_cmd_tx: Option<&'a mpsc::Sender<CalendarCommand>>,
+    pub config_dirty: &'a mut bool,
+    pub todos_dirty: &'a mut bool,
+    pub test_notification_requested: &'a mut bool,
+    pub calendar_set_url_requested: &'a mut Option<String>,
+    pub calendar_refresh_requested: &'a mut bool,
+    pub installed_fonts: &'a mut Option<Vec<InstalledFont>>,
+    pub font_search: &'a mut String,
+}
+
+pub(crate) fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
     paint_settings_material_backdrop(ui, st.config);
     let left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
     let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
@@ -883,6 +648,173 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
     });
 }
 
+pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>) {
+    let shared = Arc::clone(shared_settings_state());
+    {
+        let Ok(mut guard) = shared.lock() else {
+            return;
+        };
+        if let Some(ds) = guard.as_mut() {
+            if ds.dirty_from_ui {
+                *st.open = ds.open;
+                *st.focus_requested = ds.focus_requested;
+                *st.tab = ds.tab;
+                *st.config = ds.config.clone();
+                *st.todos = ds.todos.clone();
+                *st.new_todo_input = ds.new_todo_input.clone();
+                *st.calendar_url_input = ds.calendar_url_input.clone();
+                *st.installed_fonts = ds.installed_fonts.clone();
+                *st.font_search = ds.font_search.clone();
+                if ds.config_dirty_out {
+                    *st.config_dirty = true;
+                }
+                if ds.test_notif_out {
+                    *st.test_notification_requested = true;
+                }
+                ds.dirty_from_ui = false;
+                ds.config_dirty_out = false;
+                ds.test_notif_out = false;
+            }
+            if !*st.open {
+                *guard = None;
+                return;
+            }
+            ds.open = *st.open;
+            ds.focus_requested = *st.focus_requested;
+            ds.tab = *st.tab;
+            ds.config = st.config.clone();
+            ds.todos = st.todos.clone();
+            ds.new_todo_input = st.new_todo_input.clone();
+            ds.calendar_url_input = st.calendar_url_input.clone();
+            if ds.calendar_status != st.calendar_status
+                || ds.calendar_events.len() != st.calendar_events.len()
+            {
+                ds.calendar_events = st.calendar_events.to_vec();
+                ds.calendar_status = st.calendar_status.to_owned();
+            }
+            ds.calendar_cmd_tx = st.calendar_cmd_tx.clone();
+            if ds.installed_fonts.is_none() && st.installed_fonts.is_some() {
+                ds.installed_fonts = st.installed_fonts.clone();
+            }
+            ds.font_search = st.font_search.clone();
+        } else {
+            if !*st.open {
+                return;
+            }
+            *guard = Some(DeferredSettingsState {
+                open: *st.open,
+                focus_requested: *st.focus_requested,
+                tab: *st.tab,
+                config: st.config.clone(),
+                todos: st.todos.clone(),
+                new_todo_input: st.new_todo_input.clone(),
+                calendar_url_input: st.calendar_url_input.clone(),
+                calendar_events: st.calendar_events.to_vec(),
+                calendar_status: st.calendar_status.to_owned(),
+                calendar_cmd_tx: st.calendar_cmd_tx.clone(),
+                installed_fonts: st.installed_fonts.clone(),
+                font_search: st.font_search.clone(),
+                dirty_from_ui: false,
+                config_dirty_out: false,
+                test_notif_out: false,
+            });
+        }
+    }
+
+    let root_ctx = ctx.clone();
+    ctx.show_viewport_deferred(
+        ViewportId::from_hash_of("liebert_settings"),
+        ViewportBuilder::default()
+            .with_title(SETTINGS_WINDOW_TITLE)
+            .with_app_id("liebert-dynamic-island-settings")
+            .with_inner_size([760.0, 520.0])
+            .with_active(true)
+            .with_resizable(true),
+        move |ui, _class| {
+            let Ok(mut guard) = shared.lock() else {
+                return;
+            };
+            let Some(ds) = guard.as_mut() else {
+                return;
+            };
+            if !ds.open {
+                return;
+            }
+            if ui.input(|i| i.viewport().close_requested()) {
+                ds.open = false;
+                ds.focus_requested = false;
+                ds.dirty_from_ui = true;
+                root_ctx.request_repaint();
+                return;
+            }
+            if ds.focus_requested {
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+                ds.focus_requested = false;
+                ds.dirty_from_ui = true;
+            }
+
+            apply_settings_theme(ui, ds.config.accent_color);
+            let panel_frame = egui::Frame::new()
+                .fill(settings_panel_fill(&ds.config))
+                .inner_margin(egui::Margin::same(10));
+
+            let mut local_config_dirty = false;
+            let mut local_todos_dirty = false;
+            let mut local_test_notif = false;
+            let prev_tab = ds.tab;
+            let prev_new_todo = ds.new_todo_input.clone();
+            let prev_cal_url = ds.calendar_url_input.clone();
+            let prev_font_search = ds.font_search.clone();
+            let prev_todo_len = ds.todos.items.len();
+
+            egui::CentralPanel::default()
+                .frame(panel_frame)
+                .show(ui, |ui| {
+                    let ds = &mut *ds;
+                    render_settings_tabs_body(
+                        ui,
+                        &mut SettingsBodyState {
+                            tab: &mut ds.tab,
+                            config: &mut ds.config,
+                            todos: &mut ds.todos,
+                            new_todo_input: &mut ds.new_todo_input,
+                            calendar_url_input: &mut ds.calendar_url_input,
+                            calendar_events: &ds.calendar_events,
+                            calendar_status: &ds.calendar_status,
+                            calendar_cmd_tx: Some(&ds.calendar_cmd_tx),
+                            config_dirty: &mut local_config_dirty,
+                            todos_dirty: &mut local_todos_dirty,
+                            test_notification_requested: &mut local_test_notif,
+                            calendar_set_url_requested: &mut None,
+                            calendar_refresh_requested: &mut false,
+                            installed_fonts: &mut ds.installed_fonts,
+                            font_search: &mut ds.font_search,
+                        },
+                    );
+                });
+
+            if local_config_dirty
+                || local_todos_dirty
+                || local_test_notif
+                || ds.tab != prev_tab
+                || ds.new_todo_input != prev_new_todo
+                || ds.calendar_url_input != prev_cal_url
+                || ds.font_search != prev_font_search
+                || ds.todos.items.len() != prev_todo_len
+            {
+                ds.config_dirty_out |= local_config_dirty;
+                ds.test_notif_out |= local_test_notif;
+                ds.dirty_from_ui = true;
+                root_ctx.request_repaint();
+            }
+        },
+    );
+}
+
 pub enum SettingsIpcTarget {
     #[cfg(unix)]
     Unix(PathBuf),
@@ -998,7 +930,7 @@ impl StandaloneSettingsApp {
             if let Err(err) = self.config.save() {
                 eprintln!("Failed to save config: {err}");
             } else {
-                if let Err(err) = crate::platform::set_autostart(self.config.start_with_os) {
+                if let Err(err) = platform_light::set_autostart(self.config.start_with_os) {
                     eprintln!("Failed to apply autostart setting: {err}");
                 }
                 self.notify("config");
@@ -1019,12 +951,7 @@ impl StandaloneSettingsApp {
     }
 }
 
-impl eframe::App for StandaloneSettingsApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.render_ui(ui);
-    }
-}
-
+#[allow(dead_code)] // Used by liebert-settings; liebert-x11 calls settings_eframe::run_x11_settings.
 pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
@@ -1042,27 +969,7 @@ pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<
 
     #[cfg(not(windows))]
     {
-        let app = StandaloneSettingsApp::new(ipc_target);
-        let initial_font = app.config.font_name.clone();
-        let options = eframe::NativeOptions {
-            renderer: eframe::Renderer::Glow,
-            viewport: ViewportBuilder::default()
-                .with_title(SETTINGS_WINDOW_TITLE)
-                .with_app_id("liebert-dynamic-island-settings")
-                .with_inner_size([680.0, 560.0])
-                .with_resizable(true),
-            ..Default::default()
-        };
-
-        eframe::run_native(
-            SETTINGS_WINDOW_TITLE,
-            options,
-            Box::new(move |cc| {
-                crate::ui::apply_configured_fonts_light(&cc.egui_ctx, &initial_font);
-                Ok(Box::new(app))
-            }),
-        )
-        .map_err(|e| e.to_string())
+        crate::ui::settings_eframe::run_x11_settings(ipc_target)
     }
 }
 
@@ -1281,7 +1188,7 @@ fn render_display_tab(
             bento_card(
                 ui,
                 col_w,
-                192.0,
+                198.0,
                 accent,
                 "Theme, Colors & Glass",
                 Some((config.background_material.label(), accent_col)),
@@ -1310,27 +1217,44 @@ fn render_display_tab(
                             }
                         }
                     });
-                    ui.add_space(5.0);
-                    ui.horizontal_wrapped(|ui| {
-                        for (id, label) in [
-                            ("crimson", "Crimson"),
-                            ("obsidian", "Obsidian"),
-                            ("midnight", "Midnight"),
-                            ("amoled", "AMOLED"),
-                            ("slate", "Slate"),
-                        ] {
-                            if ui
-                                .add(
-                                    egui::Button::new(RichText::new(label).size(11.0))
-                                        .fill(Color32::from_rgb(33, 35, 44))
-                                        .corner_radius(CornerRadius::same(8)),
-                                )
-                                .clicked()
-                            {
-                                config.apply_preset(id);
-                                changed = true;
-                            }
-                        }
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Theme:");
+                        let current_preset = config.matching_preset();
+                        let selected_label = current_preset.map_or("Custom", |p| p.name);
+                        let selected_accent =
+                            current_preset.map_or(config.accent_color, |p| p.accent_color);
+                        let sel_sw = Color32::from_rgb(
+                            selected_accent[0],
+                            selected_accent[1],
+                            selected_accent[2],
+                        );
+                        egui::ComboBox::from_id_salt("theme_preset_select")
+                            .width((ui.available_width() - 6.0).max(160.0))
+                            .selected_text(
+                                RichText::new(format!("●  {selected_label}")).color(sel_sw),
+                            )
+                            .show_ui(ui, |ui| {
+                                for preset in crate::config::THEME_PRESETS {
+                                    let is_sel = current_preset.is_some_and(|p| p.id == preset.id);
+                                    let sw = Color32::from_rgb(
+                                        preset.accent_color[0],
+                                        preset.accent_color[1],
+                                        preset.accent_color[2],
+                                    );
+                                    let txt = if is_sel {
+                                        RichText::new(format!("●  {}", preset.name))
+                                            .strong()
+                                            .color(sw)
+                                    } else {
+                                        RichText::new(format!("●  {}", preset.name)).color(sw)
+                                    };
+                                    if ui.selectable_label(is_sel, txt).clicked() {
+                                        config.apply_preset(preset.id);
+                                        changed = true;
+                                    }
+                                }
+                            });
                     });
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -1406,7 +1330,7 @@ fn render_display_tab(
                             .desired_width(f32::INFINITY),
                     );
                     if !font_search.trim().is_empty() && installed_fonts.is_none() {
-                        *installed_fonts = Some(crate::platform::list_installed_fonts());
+                        *installed_fonts = Some(platform_light::list_installed_fonts());
                     }
                     let selected_font = if config.font_name.is_empty() {
                         "System Default"
@@ -1421,7 +1345,7 @@ fn render_display_tab(
                         .show_ui(ui, |ui| {
                             // Lazy-scan OS fonts only when the selector is actually opened.
                             let fonts = installed_fonts
-                                .get_or_insert_with(crate::platform::list_installed_fonts);
+                                .get_or_insert_with(platform_light::list_installed_fonts);
                             if ui
                                 .selectable_label(config.font_name.is_empty(), "System Default")
                                 .clicked()
@@ -1798,20 +1722,57 @@ fn render_todo_tab(
             if todos.items.is_empty() {
                 ui.label(RichText::new("No tasks yet.").color(Color32::GRAY));
             }
-            for item in &todos.items {
+            for (idx, item) in todos.items.iter().enumerate() {
+                let done_green = Color32::from_rgb(96, 186, 150);
+                let stripe = if item.done {
+                    Color32::from_rgba_unmultiplied(
+                        done_green.r(),
+                        done_green.g(),
+                        done_green.b(),
+                        150,
+                    )
+                } else {
+                    Color32::from_rgb(accent[0], accent[1], accent[2])
+                };
                 egui::Frame::new()
                     .fill(Color32::from_rgba_unmultiplied(
                         255,
                         255,
                         255,
-                        if item.done { 8 } else { 14 },
+                        if item.done { 8 } else { 15 },
                     ))
-                    .corner_radius(CornerRadius::same(8))
-                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .stroke(Stroke::new(
+                        1.0,
+                        Color32::from_rgba_unmultiplied(
+                            255,
+                            255,
+                            255,
+                            if item.done { 14 } else { 24 },
+                        ),
+                    ))
+                    .corner_radius(CornerRadius::same(9))
+                    .inner_margin(egui::Margin::symmetric(8, 5))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            let (bar_r, _) =
+                                ui.allocate_exact_size(Vec2::new(3.0, 16.0), Sense::hover());
+                            ui.painter()
+                                .rect_filled(bar_r, CornerRadius::same(2), stripe);
                             let mut item_done = item.done;
-                            if ui.checkbox(&mut item_done, &item.text).changed() {
+                            let txt = if item.done {
+                                RichText::new(&item.text)
+                                    .color(Color32::from_gray(155))
+                                    .strikethrough()
+                            } else {
+                                RichText::new(&item.text).strong().color(Color32::WHITE)
+                            };
+                            if ui
+                                .push_id(("settings_todo", item.id, idx), |ui| {
+                                    ui.checkbox(&mut item_done, txt)
+                                })
+                                .inner
+                                .changed()
+                            {
                                 toggle_id = Some(item.id);
                             }
                             ui.with_layout(
@@ -1831,6 +1792,29 @@ fn render_todo_tab(
                                     {
                                         remove_id = Some(item.id);
                                     }
+                                    let badge_txt = if item.done { "DONE" } else { "ACTIVE" };
+                                    let badge_col = if item.done {
+                                        done_green
+                                    } else {
+                                        Color32::from_rgb(accent[0], accent[1], accent[2])
+                                    };
+                                    egui::Frame::new()
+                                        .fill(Color32::from_rgba_unmultiplied(
+                                            badge_col.r(),
+                                            badge_col.g(),
+                                            badge_col.b(),
+                                            26,
+                                        ))
+                                        .corner_radius(CornerRadius::same(6))
+                                        .inner_margin(egui::Margin::symmetric(6, 1))
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                RichText::new(badge_txt)
+                                                    .size(9.0)
+                                                    .strong()
+                                                    .color(badge_col),
+                                            );
+                                        });
                                 },
                             );
                         });
@@ -1854,7 +1838,7 @@ fn render_todo_tab(
     dirty
 }
 
-fn apply_settings_theme(ui: &mut egui::Ui, accent: [u8; 3]) {
+pub(crate) fn apply_settings_theme(ui: &mut egui::Ui, accent: [u8; 3]) {
     let style = ui.style_mut();
     style.visuals = egui::Visuals::dark();
     style.visuals.panel_fill = Color32::from_rgb(14, 15, 19);

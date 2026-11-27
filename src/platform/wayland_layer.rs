@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use calloop::EventLoop;
 use calloop::ping::make_ping;
 use calloop_wayland_source::WaylandSource;
-use eframe::egui::{self, Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+use egui::{self, Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState, Region};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
@@ -527,6 +527,7 @@ fn spawn_settings_ipc_listener(
     let listener = UnixListener::bind(&sock_path).ok()?;
     std::thread::Builder::new()
         .name("settings-ipc-listener".to_owned())
+        .stack_size(128 * 1024)
         .spawn(move || {
             for stream in listener.incoming().flatten() {
                 let reader = BufReader::new(stream);
@@ -555,7 +556,7 @@ fn launch_or_focus_settings(child: &mut Option<Child>, ipc_sock: Option<&Path>) 
     if let Some(proc) = child.as_mut() {
         match proc.try_wait() {
             Ok(None) => {
-                let _ = linux::bring_window_to_front(SETTINGS_WINDOW_TITLE);
+                let _ = crate::platform::bring_window_to_front(SETTINGS_WINDOW_TITLE);
                 return;
             }
             Ok(Some(_)) | Err(_) => {
@@ -563,7 +564,9 @@ fn launch_or_focus_settings(child: &mut Option<Child>, ipc_sock: Option<&Path>) 
             }
         }
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(exe) =
+        platform::sibling_binary_path("liebert-settings").or_else(|| std::env::current_exe().ok())
+    else {
         return;
     };
     let mut cmd = Command::new(exe);
@@ -663,8 +666,8 @@ pub fn try_run_layer_shell(
         return Err("wlr-layer-shell surface closed before first configure".to_owned());
     }
 
-    // 512 KB initial SHM pool covers the idle/compact pill without GPU driver overhead.
-    const BASE_SHM_POOL_BYTES: usize = 512 * 1024;
+    // 192 KB initial SHM pool covers the idle/compact pill without GPU driver overhead.
+    const BASE_SHM_POOL_BYTES: usize = 192 * 1024;
     let mut pool = SlotPool::new(BASE_SHM_POOL_BYTES, &wl_state.shm_state)
         .map_err(|e| format!("wl_shm SlotPool init failed: {e}"))?;
     let mut pool_peak_frame_bytes = 0usize;
@@ -959,6 +962,7 @@ pub fn try_run_layer_shell(
             if let Ok(fresh) = SlotPool::new(BASE_SHM_POOL_BYTES, &wl_state.shm_state) {
                 pool = fresh;
                 pool_peak_frame_bytes = frame_bytes;
+                platform::trim_heap();
             }
         }
         if let Ok((buffer, bytes)) = pool.create_buffer(

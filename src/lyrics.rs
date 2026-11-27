@@ -8,16 +8,6 @@ use ureq::Agent;
 
 use crate::platform::PlatformEvent;
 
-pub const TRANSLATE_LANGUAGES: &[(&str, &str)] = &[
-    ("id", "Indonesian"),
-    ("en", "English"),
-    ("ja", "Japanese"),
-    ("ko", "Korean"),
-    ("zh-CN", "Chinese"),
-    ("ar", "Arabic"),
-    ("es", "Spanish"),
-];
-
 const MAX_RAW_LYRICS_CACHE: usize = 8;
 const MAX_ENRICHED_LYRICS_CACHE: usize = 8;
 
@@ -381,6 +371,7 @@ pub fn spawn_lyrics_worker(
 ) {
     std::thread::Builder::new()
         .name("lyrics-worker".to_owned())
+        .stack_size(256 * 1024)
         .spawn(move || {
             let config = Agent::config_builder()
                 .timeout_global(Some(Duration::from_secs(10)))
@@ -598,7 +589,7 @@ fn fetch_lyrics(
 }
 
 const LRCLIB_USER_AGENT: &str =
-    "LiebertDynamicIsland/0.2.0 (https://github.com/Zahwan316/liebert-dynamic-island)";
+    "LiebertDynamicIsland/0.2.1 (https://github.com/Zahwan316/liebert-dynamic-island)";
 
 fn query_lrclib_get(
     agent: &Agent,

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{
+use egui::{
     self, Event, Key, Modifiers, MouseWheelSource, MouseWheelUnit, PointerButton, Pos2, RawInput,
     Rect, TouchPhase, Vec2,
 };
@@ -39,7 +39,7 @@ use crate::calendar::{self, CalendarCommand};
 use crate::config::Config;
 use crate::ipc::DaemonSnapshot;
 use crate::lyrics;
-use crate::platform::{self, windows as win_platform};
+use crate::platform::{self};
 use crate::sysmon::{self, SystemMetrics};
 use crate::tray::TrayController;
 use crate::ui::soft_render::SoftCanvas;
@@ -390,7 +390,7 @@ fn launch_or_focus_settings(child: &mut Option<Child>, ipc_addr: Option<&str>) {
     if let Some(proc) = child.as_mut() {
         match proc.try_wait() {
             Ok(None) => {
-                win_platform::bring_window_to_front(SETTINGS_WINDOW_TITLE);
+                crate::platform::bring_window_to_front(SETTINGS_WINDOW_TITLE);
                 return;
             }
             Ok(Some(_)) | Err(_) => {
@@ -398,7 +398,9 @@ fn launch_or_focus_settings(child: &mut Option<Child>, ipc_addr: Option<&str>) {
             }
         }
     }
-    let Ok(exe) = std::env::current_exe() else {
+    let Some(exe) =
+        platform::sibling_binary_path("liebert-settings").or_else(|| std::env::current_exe().ok())
+    else {
         return;
     };
     let mut cmd = Command::new(exe);
