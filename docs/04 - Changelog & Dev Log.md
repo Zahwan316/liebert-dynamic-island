@@ -10,6 +10,26 @@ tags:
 
 ## 2026-11-27
 
+### Added (v0.1.12)
+
+- `src/state.rs`: **Sanitasi notifikasi web/markup (`sanitize_notification_text`, `sanitized_notification_item`)** lintas OS untuk menghapus tag HTML/XML (seperti `<a href="...">...</a>`, `<b>`, `<i>`, `<br/>`, tag terpotong `<a href="...`) dan men-decode entitas HTML (`&amp;`, `&lt;`, `&quot;`, `&#x27;`, `&nbsp;`, numerik dec/hex) termasuk markup ter-escape ganda (`&lt;a href=...&gt;`) sambil mempertahankan teks non-HTML seperti `1 < 2`, `<3`, dan alamat `<user@example.com>`. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-030).
+
+### Changed (v0.1.12)
+
+- `src/ui/mod.rs`: **Desain ulang tab Home bergaya Gallery Grid** (`render_overview_tab`, tinggi expanded `Overview` `196*s`) menjadi grid simetris kartu berukuran seragam (`cols = 1/2/3`, 3×2 saat semua modul aktif) dengan `render_gallery_tile_header`, tile visual `Clock` (berikut hero maskot `paint_mascot`), `Music` (artwork thumbnail + lyric + pill bar), `System` (pill meter CPU/RAM/Disk), `Tasks`, `Focus`, `Events`, dan `Battery` opsional untuk melengkapi grid.
+- `Cargo.toml`, `src/platform/wayland_settings.rs`: **Task RAM `< 10 MB`** — profile rilis memakai `lto = "fat"` + `opt-level = "z"` (ukuran binary Linux turun `17 MB → 15 MB`, installer NSIS payload turun ke ~9,8 MB uncompressed / ~3,29 MB LZMA) serta inisialisasi SHM `SlotPool` `wayland_settings.rs` dipangkas ke 1× buffer (`byte_len`) dan tumbuh sesuai kebutuhan compositor. Lihat **Measured (v0.1.12)**.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.12`**; AppImage (`6,4 MB`) + `.tar.gz` (`6,1 MB`) Linux serta installer NSIS + zip Windows dibangun ulang. `cargo fmt --all -- --check`, `cargo test` **76 passed**, `cargo clippy --all-targets -- -D warnings`, dan clippy `x86_64-pc-windows-gnu` (Docker `rust:slim`) bersih.
+
+### Fixed (v0.1.12)
+
+- `src/state.rs`, `src/platform/linux.rs`, `src/platform/windows.rs`: Notifikasi WhatsApp Web dan browser (Windows WinRT `ToastGeneric` + Linux D-Bus `Notify` & passive monitor `BecomeMonitor`) kini selalu disanitasi sebelum masuk `IslandState::push_notification`, sehingga tag `<a href=...>` maupun entitas HTML tidak lagi bocor ke UI.
+
+### Measured (v0.1.12)
+
+- **Settings Wayland CPU (`--settings`, host Hyprland Linux):** turun lagi dari `17,63 MB RSS` (`13,05 MB PSS`) → **`16,94 MB` RSS (`17348 kB`), `12,82 MB` PSS (`13124 kB`)**; anon/heap private hanya **`3,30 MB`** (`3380 kB`), binary `RssFile` turun ke `8,90 MB` PSS (`9116 kB`), shmem `1,27 MB` PSS.
+- **Demo + Overlay Wayland (`--demo` settled idle + maskot, host Linux):** turun dari `24,63 MB RSS` (`19,36 MB PSS`) → **`18,85 MB` RSS (`19304 kB`), `15,08 MB` PSS (`15447 kB`)**; anon/heap private turun di bawah 5 MB (**`4,98 MB`** / `5096 kB`), binary `RssFile` turun dari `14024 → 10600 kB`.
+- **Status target `< 10 MB`:** **Belum tercapai pada total RSS/PSS** (meski anon/private RAM sudah `3,30 MB` dan `4,98 MB`). Penghalang tersisa adalah `RssFile` kode/rodata dari satu executable monolitik (`eframe`/`egui_glow`/`winit`/`rustls`/`zbus`/`tray-icon`); menembus `< 10 MB` total membutuhkan pemisahan executable ringan atau menghapus fallback `eframe`/OpenGL. Host Windows RSS belum dapat diukur dari Linux. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-030) dan [[02 - Daftar Tugas & Backlog]].
+
 ### Added (v0.1.11)
 
 - `src/config.rs`, `src/platform/{mod,linux,windows}.rs`, `src/ui/{icons,mod,settings}.rs`, `src/main.rs`: **Maskot idle pelacak kursor** (Windows & Linux). Ditambahkan mode `IdleDisplayMode::Mascot` dan toggle `Config::show_idle_mascot` (default `true`); `icons::paint_mascot()` menggambar wajah kapsul putih minimal (`L` + `I` mata bergerak mengikuti posisi kursor ternormalisasi via Hyprland/X11 `cursor_screen_info` di Linux dan `GetCursorPos` + DPI di Windows, serta mulut kapsul berlubang + kapsul vertikal kecil di kanan). Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-029).

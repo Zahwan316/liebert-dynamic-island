@@ -18,7 +18,7 @@ use crate::platform::{
     AlbumArt, FontFamilyTarget, FontFileSpec, HoverPollInput, MediaCommand, MediaTrack,
     PlatformEvent, RepeatMode, decode_album_art,
 };
-use crate::state::{ListenerStatus, NotificationItem};
+use crate::state::{ListenerStatus, sanitized_notification_item};
 
 // shortcut: Non-Hyprland Wayland compositors lack wlr-layer-shell positioning in winit/eframe; upgrade to smithay-client-toolkit or iced_layershell for compositor-agnostic layer surfaces.
 
@@ -676,18 +676,17 @@ fn decode_monitored_message(msg: &zbus::Message) -> Option<Vec<PlatformEvent>> {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            Some(vec![PlatformEvent::Notification(NotificationItem {
-                id: id.to_string(),
-                app_name: if app_name.is_empty() {
-                    "Linux".to_owned()
-                } else {
-                    app_name
-                },
-                title: summary.trim().to_owned(),
-                body: body.trim().to_owned(),
-                icon_rgba: None,
-                timestamp,
-            })])
+            Some(vec![PlatformEvent::Notification(
+                sanitized_notification_item(
+                    id.to_string(),
+                    &app_name,
+                    "Linux",
+                    &summary,
+                    &body,
+                    None,
+                    timestamp,
+                ),
+            )])
         }
         Some("CloseNotification") => {
             let (id,): (u32,) = msg.body().deserialize().ok()?;
@@ -763,18 +762,15 @@ impl NotificationServer {
             .map(|d| d.as_secs())
             .unwrap_or(0);
 
-        let item = NotificationItem {
-            id: id.to_string(),
-            app_name: if app_name.is_empty() {
-                "Linux".to_owned()
-            } else {
-                app_name.to_owned()
-            },
-            title: summary.trim().to_owned(),
-            body: body.trim().to_owned(),
-            icon_rgba: None,
+        let item = sanitized_notification_item(
+            id.to_string(),
+            app_name,
+            "Linux",
+            summary,
+            body,
+            None,
             timestamp,
-        };
+        );
         let _ = self.tx.send(PlatformEvent::Notification(item));
         (self.on_wake)();
         id
@@ -790,7 +786,7 @@ impl NotificationServer {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("liebert-dynamic-island", "Liebert", "0.1.11", "1.2")
+        ("liebert-dynamic-island", "Liebert", "0.1.12", "1.2")
     }
 }
 
@@ -1672,7 +1668,7 @@ fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
                 .get(&candidate)
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.11",
+                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.12",
                 )
                 .header(
                     "Accept",
@@ -1748,11 +1744,11 @@ mod tests {
     #[test]
     fn monitored_notify_message_decodes_into_notification() {
         let body: NotifyArgs = (
-            "Test App".to_owned(),
+            "WhatsApp Web".to_owned(),
             0,
             String::new(),
-            "Title".to_owned(),
-            "Body".to_owned(),
+            "<b>Title</b> &amp; Alert".to_owned(),
+            "<a href=\"https://web.whatsapp.com\">Link</a><br>Hello".to_owned(),
             Vec::new(),
             HashMap::new(),
             -1,
@@ -1764,9 +1760,9 @@ mod tests {
         let events = decode_monitored_message(&msg).expect("decoded events");
         match events.as_slice() {
             [PlatformEvent::Notification(item)] => {
-                assert_eq!(item.app_name, "Test App");
-                assert_eq!(item.title, "Title");
-                assert_eq!(item.body, "Body");
+                assert_eq!(item.app_name, "WhatsApp Web");
+                assert_eq!(item.title, "Title & Alert");
+                assert_eq!(item.body, "Link Hello");
                 assert!(item.id.parse::<u32>().is_ok());
             }
             other => panic!("unexpected events: {other:?}"),

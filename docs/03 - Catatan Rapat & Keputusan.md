@@ -266,6 +266,18 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   3. **Verifikasi (`src/sysmon.rs`):** Test `linux_sampler_reads_live_proc_metrics` menjalankan sampler `/proc` nyata untuk memastikan CPU/RAM terbaca; `cargo test` 67 passed, clippy Linux + Windows-target bersih.
 - **Konsekuensi:** Header Expanded lebih bersih dan navigasi tetap terlihat tanpa mengorbankan tombol Settings. Versi naik ke `v0.1.7`; AppImage/tar.gz dibangun ulang. Utang RAM Settings dari ADR-024 tetap terbuka. Lihat [[01 - Arsitektur & Spesifikasi]], [[02 - Daftar Tugas & Backlog]], dan [[04 - Changelog & Dev Log]].
 
+## ADR-030: Sanitasi Notifikasi Web, Gallery Grid Tab Home & Optimasi Size/RAM v0.1.12
+- **Tanggal:** 2026-11-27
+- **Status:** Accepted (dengan utang teknis RAM `< 10 MB` pada total RssFile binary)
+- **Konteks:** Pengguna melaporkan bug minor pada notifikasi WhatsApp Web/browser di Windows dan Linux yang masih menampilkan raw HTML `<a href=...>` atau isi pesan tidak tersanitasi, serta meminta tab Home didesain ulang menyerupai **Gallery Grid** (bukan kartu asimetris). Standing preference: jalankan juga task penurunan RAM `< 10 MB`, rilis `0.1.12`, dan sinkronisasi `/docs`.
+- **Keputusan:**
+  1. **Sanitasi Terpusat (`src/state.rs`, `src/platform/{linux,windows}.rs`):** Menambahkan `sanitize_notification_text()` dan `sanitized_notification_item()` di `src/state.rs`, diterapkan di titik masuk WinRT (`extract_notification_item`), D-Bus server & monitor (`NotificationServer::notify`, `decode_monitored_message`), serta disaring kembali di `IslandState::push_notification` sebelum pemotongan `MAX_BODY_BYTES`. Pendekatan 2-pass decode+strip menangani markup asli (`<a href="...">`, `<br>`, `<b>`, tag terpotong) maupun HTML yang sudah di-escape (`&lt;a href=...&gt;`) tanpa merusak angka perbandingan, `<3`, maupun `<email>`.
+  2. **Tab Home Gallery Grid (`src/ui/mod.rs`):** `render_overview_tab` memakai tile berukuran seragam (`tile_w × tile_h`, `3×2` pada konfigurasi lengkap dengan tinggi expanded `196*s`), header ikon/badge seragam (`render_gallery_tile_header`), preview visual fokus (hero maskot/clock, thumbnail cover musik, metrik sistem pill bar, ringkasan tasks/focus/calendar, serta tile `Battery` untuk mengisi slot kosong bila ada modul dimatikan).
+  3. **RAM & Size (`Cargo.toml`, `src/platform/wayland_settings.rs`):** Memindahkan profil rilis ke `lto = "fat"` + `opt-level = "z"` dan memangkas alokasi awal SHM `wayland_settings.rs` ke `1×` buffer (`byte_len`).
+- **Konsekuensi:** `cargo fmt --all -- --check`, `cargo test` **76 passed**, `cargo clippy --all-targets -- -D warnings`, dan clippy Windows-target (Docker `rust:slim` + `gcc-mingw-w64-x86-64`) bersih; AppImage `6,4 MB` + tar.gz `6,1 MB` Linux dan installer NSIS `3,29 MB` + zip Windows `v0.1.12` dibangun. **Pengukuran RAM Wayland:** `--settings` turun menjadi **`16,94 MB` RSS (`12,82 MB` PSS; `3,30 MB` anon)** dan `--demo` turun menjadi **`18,85 MB` RSS (`15,08 MB` PSS; `4,98 MB` anon)**. Total RSS masih di atas `10 MB` karena halaman kode binary monolitik (`9–10,6 MB`), sehingga pemisahan binary/penghapusan `eframe` dicatat sebagai utang teknis lanjutan. Lihat [[01 - Arsitektur & Spesifikasi]], [[02 - Daftar Tugas & Backlog]], dan [[04 - Changelog & Dev Log]].
+
+---
+
 ## ADR-029: Maskot Idle Cursor-Tracking, Fix Karaoke Blink, Bento Grid Home/Settings & CPU Settings Renderer v0.1.11
 - **Tanggal:** 2026-11-27
 - **Status:** Accepted (dengan utang teknis RAM `< 10 MB` pada total RssFile binary)

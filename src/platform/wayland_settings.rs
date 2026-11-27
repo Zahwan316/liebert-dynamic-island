@@ -266,7 +266,7 @@ impl WaylandSettingsState {
 
         let stride = (width_px as usize) * 4;
         let byte_len = stride * (height_px as usize);
-        let target_pool_bytes = byte_len.saturating_mul(2).max(4096);
+        let target_pool_bytes = byte_len.max(4096);
 
         let pool = match self.pool.as_mut() {
             Some(pool) => {

@@ -55,7 +55,7 @@ use crate::platform::{
     AlbumArt, FontFamilyTarget, FontFileSpec, HoverPollInput, MediaCommand, MediaTrack,
     PlatformEvent, RepeatMode, decode_album_art,
 };
-use crate::state::{ListenerStatus, NotificationItem};
+use crate::state::{ListenerStatus, NotificationItem, sanitized_notification_item};
 
 fn init_com_mta() {
     // Ignore RPC_E_CHANGED_MODE if COM is already initialized on this thread.
@@ -129,21 +129,22 @@ fn extract_notification_item(notif: &UserNotification) -> Option<NotificationIte
         }
     }
 
-    let title = lines.first().cloned().unwrap_or_else(|| app_name.clone());
+    let title = lines.first().map(String::as_str).unwrap_or("");
     let body = if lines.len() > 1 {
         lines[1..].join(" — ")
     } else {
         String::new()
     };
 
-    Some(NotificationItem {
+    Some(sanitized_notification_item(
         id,
-        app_name,
+        &app_name,
+        "Windows",
         title,
-        body,
-        icon_rgba: None,
-        timestamp: unix_timestamp_secs(),
-    })
+        &body,
+        None,
+        unix_timestamp_secs(),
+    ))
 }
 
 pub fn run_notification_spike() -> Result<String, String> {
