@@ -55,11 +55,12 @@ fn insert_font_file_into_family(
     family: &egui::FontFamily,
     insert_at_front: bool,
     key: String,
-    bytes: Vec<u8>,
+    blob: Arc<dyn AsRef<[u8]> + Send + Sync>,
+    face_index: u32,
 ) {
     defs.font_data.insert(
         key.clone(),
-        std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        Arc::new(egui::FontData::from_blob(blob, face_index)),
     );
     if let Some(fam) = defs.families.get_mut(family) {
         if insert_at_front {
@@ -104,7 +105,7 @@ pub fn apply_configured_fonts(ctx: &egui::Context, font_name: &str) {
     defs.families.insert(lyrics_bold_family(), Vec::new());
 
     let trimmed = font_name.trim();
-    let mut user_selected_regular_fallback: Option<(String, Vec<u8>)> = None;
+    let mut user_selected_regular_fallback: Option<String> = None;
 
     if !trimmed.is_empty() {
         let installed = platform::list_installed_fonts();
@@ -113,13 +114,17 @@ pub fn apply_configured_fonts(ctx: &egui::Context, font_name: &str) {
             .find(|f| f.name.eq_ignore_ascii_case(trimmed))
             && let Ok(bytes) = std::fs::read(&found.path)
         {
+            // Share the same heap blob with every face; cloning the font bytes would
+            // keep a duplicate multi-hundred-KB allocation alive for the whole session.
+            let blob: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(bytes);
             let selected_is_bold = trimmed.to_ascii_lowercase().contains("bold");
             insert_font_file_into_family(
                 &mut defs,
                 &egui::FontFamily::Proportional,
                 true,
                 "user_selected_font".to_owned(),
-                bytes.clone(),
+                blob.clone(),
+                0u32,
             );
             if selected_is_bold {
                 if let Some(fam) = defs.families.get_mut(&lyrics_bold_family()) {
@@ -128,15 +133,17 @@ pub fn apply_configured_fonts(ctx: &egui::Context, font_name: &str) {
             } else if let Some(bold_sib) = find_bold_sibling_font(&installed, trimmed)
                 && let Ok(bold_bytes) = std::fs::read(&bold_sib.path)
             {
+                let bold_blob: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(bold_bytes);
                 insert_font_file_into_family(
                     &mut defs,
                     &lyrics_bold_family(),
                     false,
                     "user_selected_bold_font".to_owned(),
-                    bold_bytes,
+                    bold_blob,
+                    0u32,
                 );
             } else {
-                user_selected_regular_fallback = Some(("user_selected_font".to_owned(), bytes));
+                user_selected_regular_fallback = Some("user_selected_font".to_owned());
             }
         }
     }
@@ -152,8 +159,7 @@ pub fn apply_configured_fonts(ctx: &egui::Context, font_name: &str) {
                 } else {
                     format!("{}_{}", spec.name, face_index)
                 };
-                let mut font_data = egui::FontData::from_owned(blob.as_ref().as_ref().to_vec());
-                font_data.index = face_index;
+                let font_data = egui::FontData::from_blob(blob.clone(), face_index);
                 defs.font_data.insert(name.clone(), Arc::new(font_data));
                 if let Some(fam) = defs.families.get_mut(&lyrics_bold_family()) {
                     fam.push(name);
@@ -161,7 +167,7 @@ pub fn apply_configured_fonts(ctx: &egui::Context, font_name: &str) {
             }
         }
     }
-    if let Some((key, _)) = user_selected_regular_fallback
+    if let Some(key) = user_selected_regular_fallback
         && let Some(fam) = defs.families.get_mut(&lyrics_bold_family())
     {
         fam.push(key);
@@ -356,6 +362,15 @@ struct PillLyricTransition {
 
 const PILL_LYRIC_TRANSITION_MS: u64 = 240;
 
+/// Short fade/slide applied to incoming tab content after a next/prev switch.
+#[derive(Debug, Clone, Copy)]
+struct TabSwitch {
+    direction: f32,
+    started_at: Instant,
+}
+
+const TAB_TRANSITION_MS: u64 = 180;
+
 pub struct IslandApp {
     config: Config,
     state: IslandState,
@@ -377,6 +392,7 @@ pub struct IslandApp {
     calendar_status: String,
     alerted_events: HashSet<(String, i64)>,
     active_tab: IslandTab,
+    tab_switch: Option<TabSwitch>,
     show_settings: bool,
     settings_focus_requested: bool,
     settings_os_focus_pending: bool,
@@ -479,6 +495,7 @@ impl IslandApp {
             system_metrics: SystemMetrics::default(),
             battery_alerts: BatteryAlertTracker::default(),
             active_tab: IslandTab::Overview,
+            tab_switch: None,
             show_settings: false,
             settings_focus_requested: false,
             settings_os_focus_pending: false,
@@ -632,14 +649,17 @@ impl IslandApp {
             }
             IslandVisualState::Compact => Vec2::new(348.0 * s, 60.0 * s),
             IslandVisualState::Expanded => {
-                if self.state.active.is_none()
+                // One width for every expanded tab: switching tabs must not shift the card
+                // sideways. Height still differs for the music card.
+                let h = if self.state.active.is_none()
                     && self.active_tab == IslandTab::Music
                     && self.media.is_some()
                 {
-                    Vec2::new(self.config.expanded_width.max(468.0) * s, 286.0 * s)
+                    286.0
                 } else {
-                    Vec2::new(self.config.expanded_width.max(430.0) * s, 184.0 * s)
-                }
+                    184.0
+                };
+                Vec2::new(self.config.expanded_width.max(468.0) * s, h * s)
             }
         };
         size.x += ear_pad;
@@ -1127,16 +1147,21 @@ impl IslandApp {
         if self.gradient_key == Some(key) && self.gradient_tex.is_some() {
             return;
         }
+        // Tone-map loud album/user colors toward a neutral slate with a brightness cap so
+        // the bottom wash stays pleasant behind bright pill text. Cache key remains on the
+        // raw color; the mapping is deterministic, so animation uploads are unchanged.
+        let soft = soft_accent_rgb(accent);
         let pixels = if pill_mode {
-            build_vertical_gradient_pixels(base_bg, accent, 0.35, 0.85)
+            // Dark neutral base with a gentle wash starting a bit earlier.
+            build_vertical_gradient_pixels(base_bg, soft, 0.25, 0.55)
         } else {
-            // Blend accent toward warm soft rose/coral highlight for bottom wash matching reference.
+            // Cool neutral highlight instead of a forced rose tint; keeps the user's hue.
             let glow = [
-                lerp_u8(accent[0], 246, 0.32),
-                lerp_u8(accent[1], 195, 0.32),
-                lerp_u8(accent[2], 198, 0.32),
+                lerp_u8(soft[0], 214, 0.22),
+                lerp_u8(soft[1], 210, 0.22),
+                lerp_u8(soft[2], 208, 0.22),
             ];
-            build_vertical_gradient_pixels(base_bg, glow, 0.50, 0.85)
+            build_vertical_gradient_pixels(base_bg, glow, 0.30, 0.55)
         };
         let img = ColorImage::new([1, pixels.len()], pixels);
         if let Some(tex) = &mut self.gradient_tex {
@@ -1353,6 +1378,16 @@ impl IslandApp {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().clamp(0.001, 0.05);
         self.last_frame = now;
+
+        // Tab transitions only request fast repaints while in flight; idle cadence is untouched.
+        let tab_switching = match self.tab_switch {
+            Some(sw) if tab_transition_state(&sw, now).is_none() => {
+                self.tab_switch = None;
+                false
+            }
+            Some(_) => true,
+            None => false,
+        };
 
         let (want_exit, tray_open_settings) = self.handle_events(ctx, now);
 
@@ -1640,6 +1675,7 @@ impl IslandApp {
             || hover_changed
             || fs_changed
             || pill_lyric_animating
+            || tab_switching
         {
             Duration::ZERO
         } else if !visible {
@@ -1722,14 +1758,9 @@ impl IslandApp {
             let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
             let typing = ui.ctx().memory(|m| m.focused().is_some());
             if !typing && (left || right) {
-                let next = navigate_tab(self.active_tab, if left { -1 } else { 1 }, &self.config);
-                if next != self.active_tab {
-                    if self.active_tab == IslandTab::Music || next == IslandTab::Music {
-                        self.music_scroll_focus_key = None;
-                    }
-                    self.active_tab = next;
-                }
-                ctx.request_repaint();
+                let dir = if left { -1 } else { 1 };
+                let next = navigate_tab(self.active_tab, dir, &self.config);
+                self.switch_tab(next, dir as f32, &ctx);
             }
         }
 
@@ -1827,7 +1858,7 @@ impl IslandApp {
                             self.config.bg_color[2],
                             self.config.bg_color[3].max(235),
                         ];
-                        let docked_bg = [12, 12, 14, 252];
+                        let docked_bg = [14, 15, 19, 252];
                         let base_bg = [
                             lerp_u8(floating_bg[0], docked_bg[0], self.notch_morph),
                             lerp_u8(floating_bg[1], docked_bg[1], self.notch_morph),
@@ -1851,7 +1882,7 @@ impl IslandApp {
                                 border_alpha,
                             },
                         );
-                        (16.0 + ear_w, 10.0)
+                        (16.0 + ear_w, 2.0 * self.config.scale)
                     } else {
                         let pill_album_rgb = if matches!(
                             self.state.visual,
@@ -1873,10 +1904,10 @@ impl IslandApp {
                                 self.config.bg_color[3].max(240)
                             };
                             let alpha = ((raw_alpha as f32) * vis).round() as u8;
-                            let base_black = [0, 0, 0, alpha];
-                            self.ensure_gradient_texture(&ctx, base_black, album_rgb, true);
+                            let base_tint = [10, 10, 13, alpha];
+                            self.ensure_gradient_texture(&ctx, base_tint, album_rgb, true);
                             (
-                                Color32::from_rgba_unmultiplied(0, 0, 0, alpha),
+                                Color32::from_rgba_unmultiplied(10, 10, 13, alpha),
                                 self.gradient_tex.as_ref(),
                             )
                         } else {
@@ -1885,9 +1916,9 @@ impl IslandApp {
                                 let a = ((lerp_u8(base.a(), 252, self.notch_morph) as f32) * vis)
                                     .round() as u8;
                                 Color32::from_rgba_unmultiplied(
-                                    lerp_u8(base.r(), 7, self.notch_morph),
-                                    lerp_u8(base.g(), 7, self.notch_morph),
-                                    lerp_u8(base.b(), 9, self.notch_morph),
+                                    lerp_u8(base.r(), 10, self.notch_morph),
+                                    lerp_u8(base.g(), 10, self.notch_morph),
+                                    lerp_u8(base.b(), 13, self.notch_morph),
                                     a,
                                 )
                             } else {
@@ -1913,10 +1944,12 @@ impl IslandApp {
                                 border_alpha,
                             },
                         );
-                        let py = if self.state.visual == IslandVisualState::Idle {
-                            5.0
-                        } else {
-                            9.0
+                        // Expanded content sits almost flush with the card top; the previous
+                        // symmetric 9 px inset read as an empty strip above the header.
+                        let py = match self.state.visual {
+                            IslandVisualState::Expanded => 2.0 * self.config.scale,
+                            IslandVisualState::Idle => 5.0,
+                            IslandVisualState::Compact => 9.0,
                         };
                         (13.0 + ear_w, py)
                     };
@@ -1929,8 +1962,8 @@ impl IslandApp {
                             match self.state.visual {
                                 IslandVisualState::Expanded => {
                                     let expand_alpha = ((card_rect.height()
-                                        - 60.0 * self.config.scale)
-                                        / (56.0 * self.config.scale))
+                                        - 30.0 * self.config.scale)
+                                        / (32.0 * self.config.scale))
                                         .clamp(0.0, 1.0);
                                     if expand_alpha > 0.02 {
                                         ui.multiply_opacity(expand_alpha);
@@ -2363,8 +2396,8 @@ impl IslandApp {
             IdleDisplayMode::Pomodoro if self.config.show_pomodoro => {
                 let phase_col = match self.pomodoro.phase {
                     PomodoroPhase::Focus => accent,
-                    PomodoroPhase::ShortBreak => Color32::from_rgb(80, 210, 145),
-                    PomodoroPhase::LongBreak => Color32::from_rgb(135, 175, 255),
+                    PomodoroPhase::ShortBreak => Color32::from_rgb(96, 186, 150),
+                    PomodoroPhase::LongBreak => Color32::from_rgb(136, 158, 214),
                 };
                 let dot_color = if self.pomodoro.running {
                     phase_col
@@ -2403,12 +2436,12 @@ impl IslandApp {
                     );
                     let fill = match bat.status {
                         crate::battery::BatteryStatus::Charging
-                        | crate::battery::BatteryStatus::Full => Color32::from_rgb(80, 210, 145),
+                        | crate::battery::BatteryStatus::Full => Color32::from_rgb(96, 186, 150),
                         _ if bat.percent <= self.config.battery_critical_pct => {
-                            Color32::from_rgb(235, 95, 95)
+                            Color32::from_rgb(206, 116, 110)
                         }
                         _ if bat.percent <= self.config.battery_warn_pct => {
-                            Color32::from_rgb(245, 185, 85)
+                            Color32::from_rgb(214, 168, 112)
                         }
                         _ => accent,
                     };
@@ -2602,6 +2635,24 @@ impl IslandApp {
         });
     }
 
+    /// Single entry point for every tab change: keeps the transition timer and focus
+    /// reset consistent across keyboard, side arrows, and Home click-through.
+    fn switch_tab(&mut self, next: IslandTab, direction: f32, ctx: &egui::Context) {
+        if next == self.active_tab {
+            return;
+        }
+        if self.active_tab == IslandTab::Music || next == IslandTab::Music {
+            self.music_scroll_focus_key = None;
+        }
+        self.tab_switch = Some(TabSwitch {
+            direction: if direction < 0.0 { -1.0 } else { 1.0 },
+            started_at: Instant::now(),
+        });
+        self.active_tab = next;
+        // Input arrives in ui(), after step_logic() already chose the repaint cadence.
+        ctx.request_repaint();
+    }
+
     fn render_expanded(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, now: Instant) {
         let accent = self.effective_accent();
         let text_col = self.text_color32();
@@ -2609,6 +2660,13 @@ impl IslandApp {
         let align = self.text_align();
         let s = self.config.scale;
         let nav_card = ui.max_rect();
+        let (tab_opacity, tab_dx) = match self.tab_switch {
+            Some(sw) => {
+                let (ease, slide) = tab_transition_state(&sw, now).unwrap_or((1.0, 0.0));
+                (ease.clamp(0.15, 1.0), slide * 12.0 * s)
+            }
+            None => (1.0, 0.0),
+        };
 
         if let Some(item) = &self.state.active {
             let brand = app_brand_color(&item.app_name, accent);
@@ -2727,67 +2785,75 @@ impl IslandApp {
         let reserve = 26.0 * s;
         let content_rect = Rect::from_min_max(
             Pos2::new(nav_card.min.x + reserve, nav_card.min.y),
-            Pos2::new((nav_card.max.x - reserve).max(nav_card.min.x + reserve), nav_card.max.y),
+            Pos2::new(
+                (nav_card.max.x - reserve).max(nav_card.min.x + reserve),
+                nav_card.max.y,
+            ),
         );
-        ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
-            ui.set_clip_rect(content_rect);
-            let row_h = 24.0 * s;
-            let right_w = 30.0 * s;
-            let left_w = (ui.available_width() - right_w - 6.0 * s).max(80.0);
-            ui.horizontal(|ui| {
-                ui.allocate_ui_with_layout(
-                    Vec2::new(left_w, row_h),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.set_clip_rect(ui.max_rect());
-                        ui.label(
-                            RichText::new(self.active_tab.label())
-                                .font(FontId::proportional(10.5 * s))
-                                .color(muted),
-                        );
-                    },
-                );
-                ui.add_space(6.0 * s);
-                ui.allocate_ui_with_layout(
-                    Vec2::new(right_w, row_h),
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        ui.set_clip_rect(ui.max_rect());
-                        if icon_button(
-                            ui,
-                            IconKind::Settings,
-                            Vec2::new(26.0 * s, 23.0 * s),
-                            13.0 * s,
-                            muted,
-                            Color32::from_rgba_unmultiplied(255, 255, 255, 16),
-                            CornerRadius::same(10),
-                        )
-                        .on_hover_text("Open Settings")
-                        .clicked()
-                        {
-                            self.open_settings(SettingsTab::Appearance, ctx);
-                        }
-                    },
-                );
-            });
-            if !is_music_card {
-                ui.add_space(2.0);
-                ui.separator();
-                ui.add_space(2.0);
-            } else {
-                ui.add_space(4.0);
-            }
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(content_rect.translate(Vec2::new(tab_dx, 0.0))),
+            |ui| {
+                ui.set_clip_rect(content_rect);
+                ui.multiply_opacity(tab_opacity);
+                let row_h = 24.0 * s;
+                let right_w = 30.0 * s;
+                let left_w = (ui.available_width() - right_w - 6.0 * s).max(80.0 * s);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(left_w, row_h),
+                        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                        |ui| {
+                            ui.set_clip_rect(ui.max_rect());
+                            ui.label(
+                                RichText::new(self.active_tab.label())
+                                    .font(FontId::proportional(10.5 * s))
+                                    .color(muted),
+                            );
+                        },
+                    );
+                    ui.add_space(6.0 * s);
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(right_w, row_h),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.set_clip_rect(ui.max_rect());
+                            if icon_button(
+                                ui,
+                                IconKind::Settings,
+                                Vec2::new(26.0 * s, 23.0 * s),
+                                13.0 * s,
+                                muted,
+                                Color32::from_rgba_unmultiplied(255, 255, 255, 16),
+                                CornerRadius::same(10),
+                            )
+                            .on_hover_text("Open Settings")
+                            .clicked()
+                            {
+                                self.open_settings(SettingsTab::Appearance, ctx);
+                            }
+                        },
+                    );
+                });
+                if !is_music_card {
+                    ui.add_space(1.0 * s);
+                    ui.separator();
+                    ui.add_space(1.0 * s);
+                } else {
+                    ui.add_space(2.0 * s);
+                }
 
-            match self.active_tab {
-                IslandTab::Overview => self.render_overview_tab(ui, now),
-                IslandTab::Music => self.render_music_tab(ui, ctx, now),
-                IslandTab::Todo => self.render_todo_tab(ui),
-                IslandTab::Calendar => self.render_calendar_tab(ui),
-                IslandTab::Pomodoro => self.render_pomodoro_tab(ui, now),
-                IslandTab::System => self.render_system_tab(ui, ctx),
-                IslandTab::Battery => self.render_battery_tab(ui, ctx),
-            }
-        });
+                match self.active_tab {
+                    IslandTab::Overview => self.render_overview_tab(ui, now),
+                    IslandTab::Music => self.render_music_tab(ui, ctx, now),
+                    IslandTab::Todo => self.render_todo_tab(ui),
+                    IslandTab::Calendar => self.render_calendar_tab(ui),
+                    IslandTab::Pomodoro => self.render_pomodoro_tab(ui, now),
+                    IslandTab::System => self.render_system_tab(ui, ctx),
+                    IslandTab::Battery => self.render_battery_tab(ui, ctx),
+                }
+            },
+        );
         self.draw_side_nav(ui, ctx, nav_card);
     }
 
@@ -2818,13 +2884,7 @@ impl IslandApp {
             paint_icon(ui.painter(), rect, kind, col);
             if resp.clicked() {
                 let next = navigate_tab(self.active_tab, dir, &self.config);
-                if next != self.active_tab {
-                    if self.active_tab == IslandTab::Music || next == IslandTab::Music {
-                        self.music_scroll_focus_key = None;
-                    }
-                    self.active_tab = next;
-                }
-                ctx.request_repaint();
+                self.switch_tab(next, dir as f32, ctx);
             }
         }
     }
@@ -2836,62 +2896,65 @@ impl IslandApp {
         let align = self.text_align();
         let s = self.config.scale;
 
-        let (time_str, _) = format_clock(
-            chrono::Utc::now(),
-            &self.config.clock_timezone,
-            self.config.clock_24h,
-            self.config.clock_show_seconds,
-        );
+        // Clock and timezone share one centered line; no extra row for the zone label.
+        let (time_str, tz_opt) = clock_display_parts(&self.config);
         let row_w = ui.available_width();
         let time_font = FontId::monospace(13.5 * s);
+        let tz_font = FontId::proportional(9.5 * s);
+        let tz_gap = 6.0 * s;
+        let time_w = ui
+            .painter()
+            .layout_no_wrap(time_str.clone(), time_font.clone(), text_col)
+            .size()
+            .x;
+        let tz_w = tz_opt
+            .as_ref()
+            .map(|tz| {
+                ui.painter()
+                    .layout_no_wrap(tz.clone(), tz_font.clone(), muted)
+                    .size()
+                    .x
+            })
+            .unwrap_or(0.0);
+        let total_w = time_w + if tz_w > 0.0 { tz_gap + tz_w } else { 0.0 };
+        let lead = (row_w - total_w).max(0.0) * 0.5;
         ui.allocate_ui_with_layout(
             Vec2::new(row_w, 18.0 * s),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                let time_w = ui
-                    .painter()
-                    .layout_no_wrap(time_str.clone(), time_font.clone(), text_col)
-                    .size()
-                    .x;
-                let lead = (row_w - time_w).max(0.0) * 0.5;
+                ui.spacing_mut().item_spacing.x = 0.0;
                 if lead > 0.5 {
                     ui.add_space(lead);
                 }
                 ui.label(RichText::new(time_str).font(time_font).color(text_col));
+                if let Some(tz) = tz_opt {
+                    ui.add_space(tz_gap);
+                    ui.label(RichText::new(tz).font(tz_font).color(muted));
+                }
             },
         );
-        ui.add_space(4.0 * s);
+        ui.add_space(1.0 * s);
 
-        if self.config.show_lyrics {
-            if let Some(track) = &self.media {
-                let pos_ms = self.current_lyric_ms(now);
-                let lyric = active_karaoke(&self.lyrics, pos_ms)
-                    .map(|k| match self.config.karaoke_lyric_mode {
-                        KaraokeLyricMode::Romaji => k.romaji.unwrap_or(k.text),
-                        KaraokeLyricMode::Translate => k.translation.unwrap_or(k.text),
-                        KaraokeLyricMode::Original => k.text,
-                    })
-                    .unwrap_or(&track.title);
-                let line = if lyric == track.title {
-                    format!("{} — {}", track.title, track.artist)
-                } else {
-                    lyric.to_owned()
-                };
-                if render_overview_row(ui, IconKind::MusicNote, &line, accent, s, align, true) {
-                    self.active_tab = IslandTab::Music;
-                }
+        if self.config.show_lyrics
+            && let Some(track) = &self.media
+        {
+            let pos_ms = self.current_lyric_ms(now);
+            let lyric = active_karaoke(&self.lyrics, pos_ms)
+                .map(|k| match self.config.karaoke_lyric_mode {
+                    KaraokeLyricMode::Romaji => k.romaji.unwrap_or(k.text),
+                    KaraokeLyricMode::Translate => k.translation.unwrap_or(k.text),
+                    KaraokeLyricMode::Original => k.text,
+                })
+                .unwrap_or(&track.title);
+            let line = if lyric == track.title {
+                format!("{} — {}", track.title, track.artist)
             } else {
-                render_overview_row(
-                    ui,
-                    IconKind::MusicNote,
-                    "No music playing",
-                    muted,
-                    s,
-                    align,
-                    false,
-                );
+                lyric.to_owned()
+            };
+            if render_overview_row(ui, IconKind::MusicNote, &line, accent, s, align, true) {
+                self.switch_tab(IslandTab::Music, 1.0, ui.ctx());
             }
-            ui.add_space(2.0 * s);
+            ui.add_space(1.0 * s);
         }
 
         if self.config.show_calendar {
@@ -2909,9 +2972,9 @@ impl IslandApp {
                 "No upcoming events".to_owned()
             };
             if render_overview_row(ui, IconKind::Calendar, &cal_text, text_col, s, align, true) {
-                self.active_tab = IslandTab::Calendar;
+                self.switch_tab(IslandTab::Calendar, 1.0, ui.ctx());
             }
-            ui.add_space(2.0 * s);
+            ui.add_space(1.0 * s);
         }
 
         if self.config.show_todo {
@@ -2925,9 +2988,9 @@ impl IslandApp {
                 align,
                 true,
             ) {
-                self.active_tab = IslandTab::Todo;
+                self.switch_tab(IslandTab::Todo, 1.0, ui.ctx());
             }
-            ui.add_space(2.0 * s);
+            ui.add_space(1.0 * s);
         }
 
         if self.config.show_pomodoro {
@@ -2939,9 +3002,9 @@ impl IslandApp {
                 status
             );
             if render_overview_row(ui, IconKind::Timer, &pom_text, text_col, s, align, true) {
-                self.active_tab = IslandTab::Pomodoro;
+                self.switch_tab(IslandTab::Pomodoro, 1.0, ui.ctx());
             }
-            ui.add_space(2.0 * s);
+            ui.add_space(1.0 * s);
         }
 
         let bat_part = self
@@ -2954,7 +3017,7 @@ impl IslandApp {
             self.system_metrics.cpu_pct, self.system_metrics.ram_pct, bat_part
         );
         if render_overview_row(ui, IconKind::Settings, &sys_text, muted, s, align, true) {
-            self.active_tab = IslandTab::System;
+            self.switch_tab(IslandTab::System, 1.0, ui.ctx());
         }
     }
 
@@ -3045,7 +3108,7 @@ impl IslandApp {
                 "RAM",
                 &format!("{:.0}%", m.ram_pct),
                 m.ram_pct / 100.0,
-                Color32::from_rgb(120, 215, 170),
+                Color32::from_rgb(126, 190, 160),
                 s,
             );
             let disk_pct = m.disk_activity_pct.or(m.disk_used_pct).unwrap_or(0.0);
@@ -3059,7 +3122,7 @@ impl IslandApp {
                 disk_label,
                 &format!("{disk_pct:.0}%"),
                 disk_pct / 100.0,
-                Color32::from_rgb(255, 190, 120),
+                Color32::from_rgb(214, 168, 126),
                 s,
             );
         });
@@ -3128,8 +3191,7 @@ impl IslandApp {
                     )
                     .clicked()
             {
-                self.active_tab = IslandTab::Battery;
-                ctx.request_repaint();
+                self.switch_tab(IslandTab::Battery, -1.0, ctx);
             }
 
             if ui
@@ -3198,7 +3260,7 @@ impl IslandApp {
                 let angle = -TAU / 4.0 + time * 2.6;
                 let dot = center + Vec2::new(angle.cos(), angle.sin()) * radius;
                 ui.painter()
-                    .circle_filled(dot, 3.5 * s, Color32::from_rgb(255, 224, 130));
+                    .circle_filled(dot, 3.5 * s, Color32::from_rgb(226, 198, 144));
             }
         });
 
@@ -3208,7 +3270,7 @@ impl IslandApp {
                 RichText::new(bat.status.label())
                     .font(FontId::proportional(12.0 * s))
                     .color(if charging {
-                        Color32::from_rgb(255, 214, 120)
+                        Color32::from_rgb(220, 186, 132)
                     } else {
                         text_col
                     }),
@@ -3251,8 +3313,8 @@ impl IslandApp {
         let s = self.config.scale;
         let phase_col = match self.pomodoro.phase {
             PomodoroPhase::Focus => accent,
-            PomodoroPhase::ShortBreak => Color32::from_rgb(80, 210, 145),
-            PomodoroPhase::LongBreak => Color32::from_rgb(135, 175, 255),
+            PomodoroPhase::ShortBreak => Color32::from_rgb(96, 186, 150),
+            PomodoroPhase::LongBreak => Color32::from_rgb(136, 158, 214),
         };
 
         ui.vertical_centered(|ui| {
@@ -3410,7 +3472,8 @@ impl IslandApp {
         let mut retry_lyrics = false;
         let total_w = ui.available_width();
         let col_gap = 14.0 * s;
-        let left_w = (total_w * 0.43).max(148.0 * s);
+        // Equal columns keep the two halves visually balanced regardless of card width.
+        let left_w = ((total_w - col_gap) * 0.5).max(148.0 * s);
         let right_w = (total_w - left_w - col_gap).max(120.0 * s);
         let body_h = ui.available_height().max(140.0 * s);
 
@@ -3486,7 +3549,9 @@ impl IslandApp {
                         let btn_sz = Vec2::splat(25.0 * s);
                         let play_sz = Vec2::splat(29.0 * s);
                         let gap = 3.0 * s;
-                        let controls_w = btn_sz.x * 4.0 + play_sz.x + gap * 4.0;
+                        // Five controls also produce five gaps; count the trailing one so
+                        // the group lands exactly in the middle of the column.
+                        let controls_w = btn_sz.x * 4.0 + play_sz.x + gap * 5.0;
                         let side = ((ui.available_width() - controls_w) * 0.5).max(0.0);
                         ui.add_space(side);
                         ui.spacing_mut().item_spacing.x = gap;
@@ -3602,11 +3667,13 @@ impl IslandApp {
                 egui::Layout::top_down(align),
                 |ui| {
                     ui.set_clip_rect(ui.max_rect());
+                    // Pin the wrap width to the allocated column so a scrollbar appearing
+                    // cannot shift centered lines sideways.
+                    let wrap_w = right_w.max(60.0);
                     egui::ScrollArea::vertical()
                         .id_salt("music_lyrics_scroll")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let wrap_w = ui.available_width().max(60.0);
                             ui.with_layout(egui::Layout::top_down(align), |ui| {
                                 match &self.lyrics {
                                     LyricsData::Loading => {
@@ -4381,6 +4448,17 @@ fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     ((a as f32) + ((b as f32) - (a as f32)) * t).round() as u8
 }
 
+/// Pull loud album/accent colors toward a neutral slate and cap brightness so the
+/// gradient wash stays comfortable to look at behind white text.
+fn soft_accent_rgb(rgb: [u8; 3]) -> [u8; 3] {
+    const NEUTRAL: [u8; 3] = [126, 132, 146];
+    [
+        lerp_u8(rgb[0], NEUTRAL[0], 0.30).min(190),
+        lerp_u8(rgb[1], NEUTRAL[1], 0.30).min(190),
+        lerp_u8(rgb[2], NEUTRAL[2], 0.30).min(190),
+    ]
+}
+
 fn egui_align(align: TextAlign) -> egui::Align {
     match align {
         TextAlign::Left => egui::Align::LEFT,
@@ -4861,7 +4939,7 @@ fn render_overview_row(
     align: egui::Align,
     clickable: bool,
 ) -> bool {
-    let h = 21.0 * scale;
+    let h = 18.0 * scale;
     let w = ui.available_width().max(60.0);
     let sense = if clickable {
         Sense::click()
@@ -4887,7 +4965,7 @@ fn render_overview_row(
         }
         let pad = 6.0 * scale;
         let icon_sz = 12.0 * scale;
-        let gap = 6.0 * scale;
+        let gap = 4.0 * scale;
         let inner_w = (rect.width() - pad * 2.0).max(icon_sz + gap + 12.0);
         let text_budget = (inner_w - icon_sz - gap).max(12.0);
         let font = FontId::proportional(11.5 * scale);
@@ -4923,6 +5001,20 @@ fn render_overview_row(
 fn scale_color_alpha(color: Color32, alpha: f32) -> Color32 {
     let a = ((color.a() as f32) * alpha.clamp(0.0, 1.0)).round() as u8;
     Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), a)
+}
+
+/// Returns `(ease_0_to_1, incoming_x_frac)` while a tab switch is in flight.
+/// The incoming content slides in from the direction the user navigated.
+fn tab_transition_state(sw: &TabSwitch, now: Instant) -> Option<(f32, f32)> {
+    let dur = Duration::from_millis(TAB_TRANSITION_MS).as_secs_f32();
+    let elapsed = now.saturating_duration_since(sw.started_at).as_secs_f32();
+    if elapsed >= dur {
+        return None;
+    }
+    let t = (elapsed / dur).clamp(0.0, 1.0);
+    let ease = 1.0 - (1.0 - t).powi(3);
+    let dir = if sw.direction < 0.0 { -1.0 } else { 1.0 };
+    Some((ease, -dir * (1.0 - ease)))
 }
 
 /// Returns `(ease_0_to_1, outgoing_y_frac, incoming_y_frac)` while a pill lyric transition is active.
@@ -5225,6 +5317,14 @@ mod tests {
     }
 
     #[test]
+    fn soft_accent_mutes_loud_colors_without_losing_hue() {
+        let soft = soft_accent_rgb([255, 20, 200]);
+        assert!(soft.iter().all(|c| *c <= 190));
+        assert!(soft[0] > soft[1], "red hue must remain dominant");
+        assert!(soft[2] > soft[1], "blue hue must remain dominant");
+    }
+
+    #[test]
     fn macos_spring_overshoots_and_settles_smoothly() {
         let mut pos = 164.0;
         let mut vel = 0.0;
@@ -5269,6 +5369,35 @@ mod tests {
                 Some(t0),
                 1.0,
                 t0 + Duration::from_millis(PILL_LYRIC_TRANSITION_MS + 10)
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn tab_transition_slides_in_from_nav_side_and_finishes() {
+        let t0 = Instant::now();
+        let sw_right = TabSwitch {
+            direction: 1.0,
+            started_at: t0,
+        };
+        let (ease, slide) = tab_transition_state(&sw_right, t0 + Duration::from_millis(80))
+            .expect("active forward transition");
+        assert!(ease > 0.0 && ease < 1.0);
+        assert!(slide < 0.0, "incoming content enters from the left");
+
+        let sw_left = TabSwitch {
+            direction: -1.0,
+            started_at: t0,
+        };
+        let (_, slide_left) = tab_transition_state(&sw_left, t0 + Duration::from_millis(80))
+            .expect("active backward transition");
+        assert!(slide_left > 0.0, "incoming content enters from the right");
+
+        assert!(
+            tab_transition_state(
+                &sw_right,
+                t0 + Duration::from_millis(TAB_TRANSITION_MS + 10)
             )
             .is_none()
         );

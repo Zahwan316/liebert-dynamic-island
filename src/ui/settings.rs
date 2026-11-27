@@ -210,7 +210,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
             apply_settings_theme(ui, ds.config.accent_color);
             let panel_frame = egui::Frame::new()
                 .fill(Color32::from_rgb(19, 19, 23))
-                .inner_margin(egui::Margin::same(14));
+                .inner_margin(egui::Margin::same(10));
 
             let mut local_config_dirty = false;
             let mut local_todos_dirty = false;
@@ -283,19 +283,15 @@ struct SettingsBodyState<'a> {
     font_search: &'a mut String,
 }
 
-/// Consistent group header: title first, then the settings that belong to it.
+/// Consistent, flat group header: no nested card, just a subtle title and rule.
 fn settings_group(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
-    ui.add_space(6.0);
-    ui.label(RichText::new(title).strong());
-    egui::Frame::new()
-        .fill(Color32::from_rgb(26, 26, 32))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(8)
-        .show(ui, |ui| add_contents(ui));
+    ui.add_space(4.0);
+    ui.label(RichText::new(title).strong().size(12.5));
+    ui.separator();
+    add_contents(ui);
 }
 
 fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
-    let tab_title = st.tab.label();
     let left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
     let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
     if !ui.ctx().memory(|m| m.focused().is_some()) && (left || right) {
@@ -307,10 +303,10 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
 
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(
-            Vec2::new(120.0, ui.available_height().max(220.0)),
+            Vec2::new(104.0, ui.available_height().max(220.0)),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.spacing_mut().item_spacing.y = 2.0;
                 for tab in SettingsTab::all() {
                     let selected = *st.tab == tab;
                     let [ar, ag, ab] = st.config.accent_color;
@@ -324,7 +320,7 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
                     } else {
                         Color32::GRAY
                     }))
-                    .min_size(Vec2::new(112.0, 28.0))
+                    .min_size(Vec2::new(96.0, 26.0))
                     .fill(fill)
                     .corner_radius(CornerRadius::same(8));
                     if ui.add(btn).clicked() {
@@ -333,7 +329,7 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
                 }
             },
         );
-        ui.add_space(10.0);
+        ui.add_space(8.0);
         ui.allocate_ui_with_layout(
             Vec2::new(
                 ui.available_width().max(240.0),
@@ -344,38 +340,33 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
                 ui.set_clip_rect(ui.max_rect());
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        ui.label(RichText::new(tab_title).strong().size(18.0));
-                        ui.add_space(4.0);
-                        ui.separator();
-                        match *st.tab {
-                            SettingsTab::Appearance => render_display_tab(
-                                ui,
-                                st.config,
-                                st.config_dirty,
-                                st.installed_fonts,
-                                st.font_search,
-                            ),
-                            SettingsTab::Lyrics => {
-                                render_lyrics_tab(ui, st.config, st.config_dirty);
-                            }
-                            SettingsTab::Features => render_features_tab(
-                                ui,
-                                st.config,
-                                st.config_dirty,
-                                st.test_notification_requested,
-                            ),
-                            SettingsTab::System => {
-                                render_system_tab(ui, st.config, st.config_dirty);
-                            }
-                            SettingsTab::Battery => {
-                                render_battery_tab(ui, st.config, st.config_dirty);
-                            }
-                            SettingsTab::Todo => {
-                                *st.todos_dirty |= render_todo_tab(ui, st.todos, st.new_todo_input);
-                            }
-                            SettingsTab::Calendar => render_calendar_tab(ui, st),
+                    .show(ui, |ui| match *st.tab {
+                        SettingsTab::Appearance => render_display_tab(
+                            ui,
+                            st.config,
+                            st.config_dirty,
+                            st.installed_fonts,
+                            st.font_search,
+                        ),
+                        SettingsTab::Lyrics => {
+                            render_lyrics_tab(ui, st.config, st.config_dirty);
                         }
+                        SettingsTab::Features => render_features_tab(
+                            ui,
+                            st.config,
+                            st.config_dirty,
+                            st.test_notification_requested,
+                        ),
+                        SettingsTab::System => {
+                            render_system_tab(ui, st.config, st.config_dirty);
+                        }
+                        SettingsTab::Battery => {
+                            render_battery_tab(ui, st.config, st.config_dirty);
+                        }
+                        SettingsTab::Todo => {
+                            *st.todos_dirty |= render_todo_tab(ui, st.todos, st.new_todo_input);
+                        }
+                        SettingsTab::Calendar => render_calendar_tab(ui, st),
                     });
             },
         );
@@ -411,17 +402,27 @@ pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<
         if software_ok {
             return Ok(());
         }
-        let status = Command::new(&exe)
-            .args(&args)
+        let mut cmd = Command::new(&exe);
+        cmd.args(&args)
             .env(GL_ATTEMPT_ENV, "hardware")
-            .env_remove("LIEBERT_SETTINGS_SOFTWARE_GL")
-            .status()
-            .map_err(|e| e.to_string())?;
-        return if status.success() {
-            Ok(())
-        } else {
-            Err(format!("settings window exited with {status}"))
-        };
+            .env_remove("LIEBERT_SETTINGS_SOFTWARE_GL");
+        #[cfg(unix)]
+        {
+            // Replace the launcher instead of spawning a third process: avoids keeping
+            // an extra ~7 MB resident while the settings window is open.
+            use std::os::unix::process::CommandExt;
+            let err = cmd.exec();
+            return Err(format!("failed to exec settings window: {err}"));
+        }
+        #[cfg(not(unix))]
+        {
+            let status = cmd.status().map_err(|e| e.to_string())?;
+            return if status.success() {
+                Ok(())
+            } else {
+                Err(format!("settings window exited with {status}"))
+            };
+        }
     }
 
     let config = Config::load();
@@ -472,7 +473,7 @@ pub fn run_standalone_settings(ipc_target: Option<SettingsIpcTarget>) -> Result<
             apply_settings_theme(ui, self.config.accent_color);
             let panel_frame = egui::Frame::new()
                 .fill(Color32::from_rgb(19, 19, 23))
-                .inner_margin(egui::Margin::same(14));
+                .inner_margin(egui::Margin::same(10));
 
             let mut config_dirty = false;
             let mut todos_dirty = false;
@@ -626,15 +627,6 @@ fn render_display_tab(
             }
         }
     });
-    ui.label(
-        RichText::new(if config.notch_dock_mode {
-            "Notch menempel di tepi atas monitor"
-        } else {
-            "Floating pill dengan jarak Top Offset"
-        })
-        .small()
-        .color(Color32::GRAY),
-    );
     changed |= ui
         .add_enabled(
             !config.notch_dock_mode,
@@ -743,14 +735,6 @@ fn render_display_tab(
     changed |= ui
         .add(egui::Slider::new(&mut config.border_alpha, 0..=160).text("Border Opacity"))
         .changed();
-    if config.show_lyrics && config.dynamic_album_color {
-        ui.label(
-            RichText::new("Note: Album art dynamic accent is active while music plays.")
-                .small()
-                .color(Color32::GRAY),
-        );
-    }
-
     ui.add_space(8.0);
     ui.label(RichText::new("Font (Installed on Device)").strong());
     ui.horizontal(|ui| {
@@ -1032,11 +1016,6 @@ fn render_features_tab(
             *test_notification_requested = true;
         }
     });
-    ui.label(
-        RichText::new("Supports WhatsApp, Discord, Browser, Gmail, and Windows toasts")
-            .small()
-            .color(Color32::GRAY),
-    );
     changed |= ui
         .checkbox(&mut config.show_todo, "Show Todo List tab")
         .changed();
@@ -1167,7 +1146,7 @@ fn apply_settings_theme(ui: &mut egui::Ui, accent: [u8; 3]) {
         Color32::from_rgba_unmultiplied(accent[0], accent[1], accent[2], 175);
     style.visuals.selection.stroke =
         Stroke::new(1.0, Color32::from_rgb(accent[0], accent[1], accent[2]));
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    style.spacing.item_spacing = egui::vec2(6.0, 4.0);
 }
 
 fn render_calendar_tab(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
@@ -1256,13 +1235,6 @@ fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut 
         {
             *config_dirty = true;
         }
-        ui.label(
-            RichText::new(
-                "Windows: HKCU Run key • Linux: ~/.config/autostart — no admin/root required",
-            )
-            .small()
-            .color(Color32::GRAY),
-        );
     });
 
     settings_group(ui, "Taskbar System Monitor", |ui| {
@@ -1306,15 +1278,6 @@ fn render_system_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut 
                     *config_dirty = true;
                 }
             });
-
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(
-                    "Linux storage covers all mounted system filesystems; Windows reports C:.",
-                )
-                .small()
-                .color(Color32::GRAY),
-            );
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {

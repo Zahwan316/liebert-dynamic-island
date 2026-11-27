@@ -266,6 +266,19 @@ Log *Architecture Decision Records (ADR)* untuk proyek [[00 - Dashboard Proyek]]
   3. **Verifikasi (`src/sysmon.rs`):** Test `linux_sampler_reads_live_proc_metrics` menjalankan sampler `/proc` nyata untuk memastikan CPU/RAM terbaca; `cargo test` 67 passed, clippy Linux + Windows-target bersih.
 - **Konsekuensi:** Header Expanded lebih bersih dan navigasi tetap terlihat tanpa mengorbankan tombol Settings. Versi naik ke `v0.1.7`; AppImage/tar.gz dibangun ulang. Utang RAM Settings dari ADR-024 tetap terbuka. Lihat [[01 - Arsitektur & Spesifikasi]], [[02 - Daftar Tugas & Backlog]], dan [[04 - Changelog & Dev Log]].
 
+## ADR-028: UI Polish (Expanded/Home/Settings/Animasi/Gradient) & Batas RAM v0.1.10
+- **Tanggal:** 2026-11-27
+- **Status:** Accepted (dengan utang teknis RAM)
+- **Konteks:** Pengguna meminta perbaikan ruang kosong di atas expanded, Home lebih minimalis, animasi saat next/prev tab, layout yang selalu center, Settings lebih minimalis, dan warna gradient yang enak dipandang—semuanya di Windows **dan** Linux. Standing preference: setiap request perubahan kode harus menjalankan task penurunan RAM ke `< 10 MB` untuk overlay dan Settings.
+- **Keputusan:**
+  1. **Expanded & centering (`src/ui/mod.rs`):** Inset atas `9*s` (music `10*s`) diturunkan ke `2*s`, separator dipadatkan, dan ambang `expand_alpha` diturunkan ke `30*s/32*s`. Semua tab expanded memakai lebar `max(468)*s` agar kartu tidak berubah lebar saat pindah tab; label header dan jam Home benar-benar terpusat dengan item spacing nol; kolom Music disamakan dan wrap lirik dipatok agar scrollbar tidak menggeser teks. Gutter `26*s` + chevron tengah dipertahankan.
+  2. **Home & animasi tab (`src/ui/mod.rs`):** Clock + timezone sebaris, placeholder "No music playing" dihapus, row `21*s → 18*s` dan gap dipadatkan. `TabSwitch`/`switch_tab()` menjadi satu jalur untuk keyboard, side nav, dan click-through; transisi fade + slide 180 ms hanya meminta repaint cepat selama transisi (idle tidak berubah). Home click-through kini ikut meminta repaint—sebelumnya tidak.
+  3. **Settings & warna (`src/ui/settings.rs`, `src/ui/mod.rs`):** Judul tab duplikat dihapus, `settings_group()` jadi flat, margin/spacing diperketat, hint berulang dipangkas tanpa mengurangi kontrol. `soft_accent_rgb()` menarik warna album/aksen ke netral dengan kap `190`; gradient wash `0,35–0,85` → `0,25–0,55`, rose glow diganti highlight netral; base docked/pill dan warna donut/status diredupkan.
+  4. **RAM (`src/ui/mod.rs`, `src/ui/settings.rs`):** Byte font dibagikan via `Arc<FontData::from_blob>` (tidak ada `to_vec()` duplicate), fallback font tidak menyimpan `Vec<u8>` tak terpakai, dan launcher Settings Unix memakai `exec` untuk hardware GL (menghapus proses launcher ~7 MB saat window aktif). Tidak ada dependensi baru.
+- **Konsekuensi:** `cargo fmt --all -- --check`, `cargo test` **74 passed**, `cargo clippy --all-targets -- -D warnings`, dan clippy Windows-target bersih; AppImage/tar.gz + installer/zip v0.1.10 dibangun. **Target `< 10 MB` tidak tercapai**: overlay `VmRSS 63,1 MB` / `Pss 59,0 MB` (hampir sama dengan baseline), Settings `VmRSS 90,2 MB` / `Pss 78,2 MB` (turun dari `102,8 MB` tapi `RssFile 67,8 MB` driver NVIDIA/LLVM tetap dominan). Investigasi menemukan ~52 MB region anonymous private-dirty pada daemon headless tanpa egui—bukan font/atlas—sehingga font trimming saja tidak cukup. Jalan yang kredibel: renderer CPU untuk Settings (menggantikan `egui_glow`) + pemisahan binary/fitur + identifikasi pemilik region anonymous; diperkirakan 2–5 hari kerja dengan risiko input/IME/DPI tinggi. Utang teknis tetap terbuka di [[02 - Daftar Tugas & Backlog]]. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[04 - Changelog & Dev Log]].
+
+---
+
 ## ADR-027: Idle Battery Mode & Expanded Layout Polish v0.1.9
 - **Tanggal:** 2026-11-27
 - **Status:** Diterima

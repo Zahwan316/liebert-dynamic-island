@@ -10,6 +10,29 @@ tags:
 
 ## 2026-11-27
 
+### Added (v0.1.10)
+
+- `src/ui/mod.rs`: **Animasi pergantian tab** (both) untuk next/prev via arrow keyboard, chevron samping, dan click-through Home/tombol Battery. `TabSwitch` menyimpan arah + `Instant`; konten baru masuk dengan fade (180 ms) dan sedikit slide dari sisi navigasi. Hanya meminta repaint cepat selama transisi—idle tidak berubah. Test `tab_transition_slides_in_from_nav_side_and_finishes`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-028).
+
+### Changed (v0.1.10)
+
+- `src/ui/mod.rs`: Expanded card memakai **satu lebar untuk semua tab** (`468*s`) sehingga perpindahan tab tidak menggeser kartu; header label tab kini benar-benar terpusat di kolomnya, spacer horizontal header dan jam Home dinolkan agar perhitungan centering presisi. Kolom Music kiri/kanan disamakan, lebar wrap lirik dipatok ke kolom agar scrollbar tidak menggeser teks, dan grup transport menghitung gap kelima. Lihat [[01 - Arsitektur & Spesifikasi]] dan [[03 - Catatan Rapat & Keputusan]] (ADR-028).
+- `src/ui/settings.rs`: Settings dibuat lebih minimalis (both): judul tab duplikat dihapus, `settings_group()` kini flat tanpa kartu bertingkat, margin panel `14 → 10`, rail tab `120 → 104`, spacing item `8×6 → 6×4`, serta hint/teks penjelas yang berulang dipangkas tanpa menghapus satu pun kontrol.
+- `src/ui/mod.rs`: Palet gradient lebih lembut (both): `soft_accent_rgb()` menarik warna album/aksen ke abu netral dan membatasi kecerahan (`≤190`), wash dimulai lebih awal dengan kekuatan `0,55` (dulu `0,85`), rose glow dipaksa diganti highlight netral dingin, dan base pill/dock jadi abu gelap `[10,10,13]` / `[14,15,19]`. Warna donut/status neon juga diredupkan. Test `soft_accent_mutes_loud_colors_without_losing_hue`.
+- `src/ui/mod.rs`, `src/ui/settings.rs`: Task RAM — blob font kini di-`Arc`-kan dan dibagikan antarface (menghapus salinan heap byte font), fallback `user_selected_regular_fallback` tidak lagi menyimpan `Vec<u8>` yang tak terpakai, dan launcher Settings Unix memakai `exec` untuk percobaan hardware GL sehingga tidak ada proses launcher tambahan ~7 MB. Lihat **Measured** di bawah.
+- `Cargo.toml`, `Cargo.lock`, `scripts/build-appimage.sh`, `installer/windows/installer.nsi`, `packaging/aur/PKGBUILD`, `packaging/aur/.SRCINFO`, `src/platform/linux.rs`, `src/lyrics.rs`, `README.md`: Versi naik ke **`0.1.10`**; AppImage + tar.gz Linux dan installer + zip Windows dibangun ulang. `cargo test` **74 passed**, `cargo fmt --all -- --check` bersih, `cargo clippy --all-targets -- -D warnings` bersih, clippy Windows-target bersih (Docker `rust:slim` + `gcc-mingw-w64-x86-64`).
+
+### Fixed (v0.1.10)
+
+- `src/ui/mod.rs`: Ruang kosong di atas expanded hilang (both)—inset atas `9*s → 2*s` (kartu musik `10*s → 2*s`) dan separator dipadatkan; ambang `expand_alpha` diturunkan agar konten muncul lebih awal saat kartu membuka. Gutter arrow dan chevron tengah tidak berubah.
+- `src/ui/mod.rs`: Jam Home kini menampilkan label zona waktu sebaris (menggantikan placeholder "No music playing" yang memakan satu baris), sehingga info tetap lengkap tanpa baris tambahan.
+
+### Measured (v0.1.10)
+
+- Overlay Wayland/`--demo` (host Linux): `VmRSS 63,1 MB` (63.100 kB), `Pss 59,0 MB`, `RssAnon 46,1 MB`, `RssFile 16,7 MB` — praktis sama dengan baseline sebelum perubahan. Dedup byte font tidak terlihat pada skala ini karena font sistem merupakan `RssFile`/blok heap kecil; Investigasi menunjukkan ~52 MB region anonymous private-dirty milik dependency di luar egui.
+- Jendela Settings (host NVIDIA, `VmRSS 90,2 MB`, `Pss 78,2 MB`, `RssFile 67,8 MB`) — turun dari `102,8 MB` terutama karena proses launcher diganti `exec`; tetap didominasi `libnvidia-gpucomp`/`libnvidia-eglcore`/`libLLVM`. RSS Windows tidak terukur dari host Linux.
+- **Target `< 10 MB` belum tercapai** untuk overlay maupun Settings. Rincian penghalang dan utang teknis dicatat di [[03 - Catatan Rapat & Keputusan]] (ADR-028) dan [[02 - Daftar Tugas & Backlog]].
+
 ### Added (v0.1.9)
 
 - `src/config.rs`, `src/ui/settings.rs`, `src/ui/mod.rs`: Menambah opsi idle **`Battery`** pada `IdleDisplayMode` (Settings → Idle Display & Clock) untuk menampilkan persentase/status baterai di pill saat idle pada Linux dan Windows; jika tidak ada baterai terdeteksi, pill menampilkan `No battery`. Lihat [[03 - Catatan Rapat & Keputusan]] (ADR-027).
