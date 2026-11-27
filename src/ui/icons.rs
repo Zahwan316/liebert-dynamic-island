@@ -12,6 +12,13 @@ pub enum IconKind {
     TodoCheck,
     Calendar,
     Timer,
+    Bell,
+    Cpu,
+    Memory,
+    Disk,
+    ArrowUp,
+    ArrowDown,
+    Info,
     Shuffle,
     Previous,
     Play,
@@ -54,6 +61,18 @@ pub fn icon_button(
 }
 
 pub fn paint_mascot(painter: &egui::Painter, rect: Rect, eye_offset_norm: Vec2, color: Color32) {
+    paint_mascot_fx(painter, rect, eye_offset_norm, 1.0, Some(color), color);
+}
+
+/// Renders the mascot with eye blink aperture (`eye_open` in `0.14..=1.0`) and optional aura glow.
+pub fn paint_mascot_fx(
+    painter: &egui::Painter,
+    rect: Rect,
+    eye_offset_norm: Vec2,
+    eye_open: f32,
+    glow_color: Option<Color32>,
+    color: Color32,
+) {
     let h = rect.height().min(rect.width()).max(8.0);
     let c = rect.center();
     let u = h / 24.0;
@@ -69,55 +88,56 @@ pub fn paint_mascot(painter: &egui::Painter, rect: Rect, eye_offset_norm: Vec2, 
     let mouth_dx = eye_dx * 0.14;
     let mouth_dy = eye_dy * 0.14;
 
-    let eye_h = 10.2 * u;
+    let open = eye_open.clamp(0.14, 1.0);
+    let base_eye_h = 10.2 * u;
     let eye_t = (3.0 * u).max(1.8);
+    let eye_h = (base_eye_h * open).max(eye_t * 0.85);
     let eye_cap = (eye_t * 0.5).round().clamp(1.0, 16.0) as u8;
     let l_width = 6.6 * u;
     let eye_gap = 4.4 * u;
     let total_eyes_w = l_width + eye_gap + eye_t;
 
     let eyes_left = c.x - total_eyes_w * 0.5 + eye_dx;
-    let eyes_top = c.y - 9.8 * u + eye_dy;
+    let base_eyes_cy = c.y - 9.8 * u + base_eye_h * 0.5 + eye_dy;
+    let eyes_top = base_eyes_cy - eye_h * 0.5;
 
-    // Left eye ("L"): split into non-overlapping vertical stem + horizontal foot so alpha fades cleanly.
+    let paint_glow_rect = |r: Rect, cr: CornerRadius| {
+        let Some(gc) = glow_color else {
+            return;
+        };
+        let outer = (2.2 * u).max(1.5);
+        let inner = (1.0 * u).max(0.8);
+        painter.rect_filled(
+            r.expand(outer),
+            cr,
+            Color32::from_rgba_unmultiplied(gc.r(), gc.g(), gc.b(), (gc.a() as f32 * 0.10) as u8),
+        );
+        painter.rect_filled(
+            r.expand(inner),
+            cr,
+            Color32::from_rgba_unmultiplied(gc.r(), gc.g(), gc.b(), (gc.a() as f32 * 0.24) as u8),
+        );
+    };
+
+    let stem_h = (eye_h - eye_t).max(0.0);
     let stem_rect = Rect::from_min_max(
         Pos2::new(eyes_left, eyes_top),
-        Pos2::new(eyes_left + eye_t, eyes_top + eye_h - eye_t),
+        Pos2::new(eyes_left + eye_t, eyes_top + stem_h),
     );
-    painter.rect_filled(
-        stem_rect,
-        CornerRadius {
-            nw: eye_cap,
-            ne: eye_cap,
-            sw: 0,
-            se: 0,
-        },
-        color,
-    );
+    let foot_y0 = eyes_top + stem_h;
     let foot_rect = Rect::from_min_max(
-        Pos2::new(eyes_left, eyes_top + eye_h - eye_t),
-        Pos2::new(eyes_left + l_width, eyes_top + eye_h),
+        Pos2::new(eyes_left, foot_y0),
+        Pos2::new(
+            eyes_left + l_width,
+            (eyes_top + eye_h).max(foot_y0 + eye_t * 0.85),
+        ),
     );
-    painter.rect_filled(
-        foot_rect,
-        CornerRadius {
-            nw: 0,
-            ne: eye_cap,
-            sw: eye_cap,
-            se: eye_cap,
-        },
-        color,
-    );
-
-    // Right eye ("I"): vertical rounded capsule.
     let right_eye_x = eyes_left + l_width + eye_gap;
     let right_eye_rect = Rect::from_min_max(
         Pos2::new(right_eye_x, eyes_top),
         Pos2::new(right_eye_x + eye_t, eyes_top + eye_h),
     );
-    painter.rect_filled(right_eye_rect, CornerRadius::same(eye_cap), color);
 
-    // Mouth: hollow horizontal pill + solid vertical pill on the right.
     let mouth_h = (4.8 * u).max(3.2);
     let mouth_pill_w = 10.5 * u;
     let mouth_gap = 1.6 * u;
@@ -125,25 +145,78 @@ pub fn paint_mascot(painter: &egui::Painter, rect: Rect, eye_offset_norm: Vec2, 
     let total_mouth_w = mouth_pill_w + mouth_gap + mouth_dot_w;
     let mouth_left = c.x - total_mouth_w * 0.5 + mouth_dx;
     let mouth_top = c.y + 4.4 * u + mouth_dy;
-
     let mouth_pill_rect = Rect::from_min_size(
         Pos2::new(mouth_left, mouth_top),
         Vec2::new(mouth_pill_w, mouth_h),
     );
     let mouth_stroke = (1.45 * u).clamp(1.0, 2.8);
     let mouth_cap = (mouth_h * 0.5).round().clamp(1.0, 16.0) as u8;
+    let mouth_dot_rect = Rect::from_min_size(
+        Pos2::new(mouth_left + mouth_pill_w + mouth_gap, mouth_top),
+        Vec2::new(mouth_dot_w, mouth_h),
+    );
+    let dot_cap = (mouth_dot_w * 0.5).round().clamp(1.0, 12.0) as u8;
+
+    // Soft luminous aura beneath mascot shapes.
+    if stem_h > 0.5 {
+        paint_glow_rect(stem_rect, CornerRadius::same(eye_cap));
+    }
+    paint_glow_rect(foot_rect, CornerRadius::same(eye_cap));
+    paint_glow_rect(right_eye_rect, CornerRadius::same(eye_cap));
+    if let Some(gc) = glow_color {
+        painter.rect_stroke(
+            mouth_pill_rect.expand(1.2 * u),
+            CornerRadius::same(mouth_cap.saturating_add(1)),
+            Stroke::new(
+                mouth_stroke + 1.8 * u,
+                Color32::from_rgba_unmultiplied(
+                    gc.r(),
+                    gc.g(),
+                    gc.b(),
+                    (gc.a() as f32 * 0.16) as u8,
+                ),
+            ),
+            egui::StrokeKind::Middle,
+        );
+    }
+    paint_glow_rect(mouth_dot_rect, CornerRadius::same(dot_cap));
+
+    // Left eye ("L"): crisp rounded stem + foot (collapses smoothly during blink).
+    if stem_h > 0.5 {
+        painter.rect_filled(
+            stem_rect,
+            CornerRadius {
+                nw: eye_cap,
+                ne: eye_cap,
+                sw: 0,
+                se: 0,
+            },
+            color,
+        );
+        painter.rect_filled(
+            foot_rect,
+            CornerRadius {
+                nw: 0,
+                ne: eye_cap,
+                sw: eye_cap,
+                se: eye_cap,
+            },
+            color,
+        );
+    } else {
+        painter.rect_filled(foot_rect, CornerRadius::same(eye_cap), color);
+    }
+
+    // Right eye ("I"): vertical rounded capsule.
+    painter.rect_filled(right_eye_rect, CornerRadius::same(eye_cap), color);
+
+    // Mouth: hollow horizontal pill + solid vertical pill on the right.
     painter.rect_stroke(
         mouth_pill_rect,
         CornerRadius::same(mouth_cap),
         Stroke::new(mouth_stroke, color),
         egui::StrokeKind::Inside,
     );
-
-    let mouth_dot_rect = Rect::from_min_size(
-        Pos2::new(mouth_left + mouth_pill_w + mouth_gap, mouth_top),
-        Vec2::new(mouth_dot_w, mouth_h),
-    );
-    let dot_cap = (mouth_dot_w * 0.5).round().clamp(1.0, 12.0) as u8;
     painter.rect_filled(mouth_dot_rect, CornerRadius::same(dot_cap), color);
 }
 
@@ -259,6 +332,151 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, kind: IconKind, color: Co
             painter.circle_stroke(c, s * 0.36, stroke);
             painter.line_segment([c, Pos2::new(c.x, c.y - s * 0.22)], stroke);
             painter.line_segment([c, Pos2::new(c.x + s * 0.16, c.y + s * 0.08)], stroke);
+        }
+        IconKind::Bell => {
+            let dome = Rect::from_center_size(
+                Pos2::new(c.x, c.y - s * 0.04),
+                Vec2::new(s * 0.56, s * 0.58),
+            );
+            painter.rect_stroke(
+                dome,
+                CornerRadius {
+                    nw: (s * 0.26).round() as u8,
+                    ne: (s * 0.26).round() as u8,
+                    sw: 2,
+                    se: 2,
+                },
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            let brim_y = dome.bottom() + s * 0.03;
+            painter.line_segment(
+                [
+                    Pos2::new(c.x - s * 0.36, brim_y),
+                    Pos2::new(c.x + s * 0.36, brim_y),
+                ],
+                stroke,
+            );
+            painter.circle_filled(
+                Pos2::new(c.x, brim_y + s * 0.13),
+                (s * 0.09).max(1.3),
+                color,
+            );
+        }
+        IconKind::Cpu => {
+            let body = Rect::from_center_size(c, Vec2::splat(s * 0.52));
+            painter.rect_stroke(
+                body,
+                CornerRadius::same((s * 0.10).round() as u8),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.rect_filled(
+                Rect::from_center_size(c, Vec2::splat(s * 0.20)),
+                CornerRadius::same(1),
+                color,
+            );
+            let p_len = s * 0.13;
+            for delta in [-s * 0.12, s * 0.12] {
+                painter.line_segment(
+                    [
+                        Pos2::new(c.x + delta, body.top()),
+                        Pos2::new(c.x + delta, body.top() - p_len),
+                    ],
+                    stroke,
+                );
+                painter.line_segment(
+                    [
+                        Pos2::new(c.x + delta, body.bottom()),
+                        Pos2::new(c.x + delta, body.bottom() + p_len),
+                    ],
+                    stroke,
+                );
+                painter.line_segment(
+                    [
+                        Pos2::new(body.left(), c.y + delta),
+                        Pos2::new(body.left() - p_len, c.y + delta),
+                    ],
+                    stroke,
+                );
+                painter.line_segment(
+                    [
+                        Pos2::new(body.right(), c.y + delta),
+                        Pos2::new(body.right() + p_len, c.y + delta),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        IconKind::Memory => {
+            let stick = Rect::from_center_size(c, Vec2::new(s * 0.78, s * 0.44));
+            painter.rect_stroke(
+                stick,
+                CornerRadius::same((s * 0.08).round() as u8),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            for dx in [-s * 0.20, 0.0, s * 0.20] {
+                painter.rect_filled(
+                    Rect::from_center_size(
+                        Pos2::new(c.x + dx, c.y - s * 0.02),
+                        Vec2::new(s * 0.11, s * 0.20),
+                    ),
+                    CornerRadius::same(1),
+                    color,
+                );
+                painter.line_segment(
+                    [
+                        Pos2::new(c.x + dx, stick.bottom()),
+                        Pos2::new(c.x + dx, stick.bottom() + s * 0.12),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        IconKind::Disk => {
+            let drive = Rect::from_center_size(c, Vec2::new(s * 0.68, s * 0.72));
+            painter.rect_stroke(
+                drive,
+                CornerRadius::same((s * 0.14).round() as u8),
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.circle_stroke(
+                Pos2::new(c.x, c.y - s * 0.08),
+                s * 0.16,
+                Stroke::new((stroke_w * 0.85).max(1.0), color),
+            );
+            painter.circle_filled(
+                Pos2::new(c.x + s * 0.16, drive.bottom() - s * 0.13),
+                (s * 0.06).max(1.1),
+                color,
+            );
+        }
+        IconKind::ArrowUp => {
+            let top = Pos2::new(c.x, c.y - s * 0.30);
+            let bot = Pos2::new(c.x, c.y + s * 0.30);
+            painter.line_segment([bot, top], stroke);
+            painter.line_segment([top, Pos2::new(c.x - s * 0.20, c.y - s * 0.08)], stroke);
+            painter.line_segment([top, Pos2::new(c.x + s * 0.20, c.y - s * 0.08)], stroke);
+        }
+        IconKind::ArrowDown => {
+            let top = Pos2::new(c.x, c.y - s * 0.30);
+            let bot = Pos2::new(c.x, c.y + s * 0.30);
+            painter.line_segment([top, bot], stroke);
+            painter.line_segment([bot, Pos2::new(c.x - s * 0.20, c.y + s * 0.08)], stroke);
+            painter.line_segment([bot, Pos2::new(c.x + s * 0.20, c.y + s * 0.08)], stroke);
+        }
+        IconKind::Info => {
+            painter.circle_stroke(c, s * 0.38, stroke);
+            painter.circle_filled(Pos2::new(c.x, c.y - s * 0.16), (s * 0.06).max(1.1), color);
+            painter.line_segment(
+                [
+                    Pos2::new(c.x, c.y - s * 0.02),
+                    Pos2::new(c.x, c.y + s * 0.20),
+                ],
+                stroke,
+            );
         }
         IconKind::Play => {
             let half_h = s * 0.34;

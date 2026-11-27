@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use windows::Foundation::TypedEventHandler;
@@ -135,6 +135,7 @@ fn extract_notification_item(notif: &UserNotification) -> Option<NotificationIte
     } else {
         String::new()
     };
+    let icon_rgba = extract_win_app_icon(notif, &app_name);
 
     Some(sanitized_notification_item(
         id,
@@ -142,9 +143,48 @@ fn extract_notification_item(notif: &UserNotification) -> Option<NotificationIte
         "Windows",
         title,
         &body,
-        None,
+        icon_rgba,
         unix_timestamp_secs(),
     ))
+}
+
+fn extract_win_app_icon(notif: &UserNotification, app_name: &str) -> Option<Vec<u8>> {
+    type WinIconCache = Vec<(String, Option<Vec<u8>>)>;
+    static WIN_ICON_CACHE: OnceLock<Mutex<WinIconCache>> = OnceLock::new();
+    let cache_key = app_name.trim().to_ascii_lowercase();
+    let cache = WIN_ICON_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(guard) = cache.lock()
+        && let Some((_, cached)) = guard.iter().find(|(k, _)| k == &cache_key)
+    {
+        return cached.clone();
+    }
+
+    let logo_ref = notif
+        .AppInfo()
+        .ok()
+        .and_then(|info| info.DisplayInfo().ok())
+        .and_then(|disp| {
+            disp.GetLogo(windows::Foundation::Size {
+                Width: 48.0,
+                Height: 48.0,
+            })
+            .ok()
+        });
+    let rgba = logo_ref
+        .and_then(|r| {
+            let iface: windows::Storage::Streams::IRandomAccessStreamReference =
+                windows::core::Interface::cast(&r).ok()?;
+            read_stream_ref_bytes(&iface, 2 * 1024 * 1024)
+        })
+        .and_then(|bytes| super::decode_notification_icon_bytes(&bytes));
+
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= 32 {
+            guard.remove(0);
+        }
+        guard.push((cache_key, rgba.clone()));
+    }
+    rgba
 }
 
 pub fn run_notification_spike() -> Result<String, String> {
@@ -509,13 +549,13 @@ fn read_smtc_track(
     ))
 }
 
-fn read_smtc_thumbnail(
-    props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
-) -> Option<Arc<AlbumArt>> {
-    let thumb_ref = props.Thumbnail().ok()?;
-    let stream = thumb_ref.OpenReadAsync().ok()?.join().ok()?;
+fn read_stream_ref_bytes(
+    stream_ref: &windows::Storage::Streams::IRandomAccessStreamReference,
+    max_bytes: usize,
+) -> Option<Vec<u8>> {
+    let stream = stream_ref.OpenReadAsync().ok()?.join().ok()?;
     let size = stream.Size().ok()? as usize;
-    if size == 0 || size > 4 * 1024 * 1024 {
+    if size == 0 || size > max_bytes {
         return None;
     }
     let reader = DataReader::CreateDataReader(&stream).ok()?;
@@ -525,6 +565,14 @@ fn read_smtc_thumbnail(
     }
     let mut buf = vec![0u8; loaded];
     reader.ReadBytes(&mut buf).ok()?;
+    Some(buf)
+}
+
+fn read_smtc_thumbnail(
+    props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
+) -> Option<Arc<AlbumArt>> {
+    let thumb_ref = props.Thumbnail().ok()?;
+    let buf = read_stream_ref_bytes(&thumb_ref, 4 * 1024 * 1024)?;
     decode_album_art(&buf)
 }
 

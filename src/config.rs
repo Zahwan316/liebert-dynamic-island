@@ -69,6 +69,26 @@ impl TextAlign {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum BackgroundMaterial {
+    #[default]
+    Solid,
+    Acrylic,
+    FrostedGlass,
+    LiquidGlass,
+}
+
+impl BackgroundMaterial {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Solid => "Solid",
+            Self::Acrylic => "Acrylic",
+            Self::FrostedGlass => "Frosted Glass",
+            Self::LiquidGlass => "Liquid Glass",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum TaskbarFormat {
     #[default]
     CompactText,
@@ -123,6 +143,7 @@ pub struct Config {
     pub clock_24h: bool,
     pub clock_show_seconds: bool,
     pub bg_color: [u8; 4],
+    pub background_material: BackgroundMaterial,
     pub accent_color: [u8; 3],
     pub text_color: [u8; 3],
     pub border_alpha: u8,
@@ -182,6 +203,7 @@ impl Default for Config {
             clock_24h: true,
             clock_show_seconds: false,
             bg_color: [16, 16, 20, 240],
+            background_material: BackgroundMaterial::Solid,
             accent_color: [110, 195, 255],
             text_color: [245, 245, 248],
             border_alpha: 36,
@@ -326,6 +348,7 @@ mod tests {
         assert!(cfg.hide_in_fullscreen);
         assert_eq!(cfg.idle_display, IdleDisplayMode::Auto);
         assert!(cfg.show_idle_mascot);
+        assert_eq!(cfg.background_material, BackgroundMaterial::Solid);
         assert_eq!(cfg.clock_timezone, "Local");
         assert!(cfg.show_notifications && cfg.show_lyrics && cfg.show_todo && cfg.show_calendar);
         assert!(cfg.dynamic_album_color && cfg.compact_album_gradient && cfg.show_pill_translation);
@@ -355,6 +378,7 @@ mod tests {
             lyric_offset_ms: -450,
             idle_display: IdleDisplayMode::Mascot,
             show_idle_mascot: false,
+            background_material: BackgroundMaterial::LiquidGlass,
             clock_timezone: "Asia/Jakarta".to_owned(),
             clock_24h: false,
             clock_show_seconds: true,
@@ -381,6 +405,7 @@ mod tests {
         assert_eq!(parsed.collapse_timeout_secs, 7);
         assert_eq!(parsed.scale, 1.0);
         assert!(parsed.show_idle_mascot);
+        assert_eq!(parsed.background_material, BackgroundMaterial::Solid);
         assert_eq!(parsed.text_align, TextAlign::Left);
         assert_eq!(parsed.bg_color, Config::default().bg_color);
     }

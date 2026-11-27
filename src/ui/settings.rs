@@ -13,7 +13,8 @@ use crate::calendar::{
 };
 use crate::clock::{COMMON_TIMEZONES, format_clock, is_valid_timezone};
 use crate::config::{
-    Config, IdleDisplayMode, KaraokeLyricMode, TaskbarFormat, TaskbarPosition, TextAlign,
+    BackgroundMaterial, Config, IdleDisplayMode, KaraokeLyricMode, TaskbarFormat, TaskbarPosition,
+    TextAlign,
 };
 use crate::lyrics::TRANSLATE_LANGUAGES;
 use crate::platform::InstalledFont;
@@ -31,6 +32,7 @@ pub enum SettingsTab {
     Battery,
     Todo,
     Calendar,
+    About,
 }
 
 impl SettingsTab {
@@ -43,18 +45,20 @@ impl SettingsTab {
             Self::Battery => "Battery",
             Self::Todo => "Tasks",
             Self::Calendar => "Calendar",
+            Self::About => "About",
         }
     }
 
     fn subtitle(self) -> &'static str {
         match self {
-            Self::Appearance => "Island surface, mascot, clock, theme & typography",
+            Self::Appearance => "Island surface, glass material, mascot, clock & typography",
             Self::Lyrics => "Media sync, karaoke highlight, romaji & translation",
             Self::Features => "Auto-hide, fullscreen rules, notifications & Pomodoro",
             Self::System => "OS startup & taskbar system monitor layout",
             Self::Battery => "Device power telemetry & low-battery alerts",
             Self::Todo => "Local quick checklist stored in todos.toml",
             Self::Calendar => "Google Calendar secret .ics sync & upcoming schedule",
+            Self::About => "Creator, application version, license & runtime info",
         }
     }
 
@@ -63,14 +67,15 @@ impl SettingsTab {
             Self::Appearance => IconKind::Settings,
             Self::Lyrics => IconKind::MusicNote,
             Self::Features => IconKind::Timer,
-            Self::System => IconKind::Dot,
+            Self::System => IconKind::Cpu,
             Self::Battery => IconKind::Dot,
             Self::Todo => IconKind::TodoCheck,
             Self::Calendar => IconKind::Calendar,
+            Self::About => IconKind::Info,
         }
     }
 
-    fn all() -> [Self; 7] {
+    fn all() -> [Self; 8] {
         [
             Self::Appearance,
             Self::Lyrics,
@@ -79,6 +84,7 @@ impl SettingsTab {
             Self::Battery,
             Self::Todo,
             Self::Calendar,
+            Self::About,
         ]
     }
 }
@@ -234,7 +240,7 @@ pub fn render_settings_viewport(ctx: &egui::Context, st: SettingsWindowState<'_>
 
             apply_settings_theme(ui, ds.config.accent_color);
             let panel_frame = egui::Frame::new()
-                .fill(Color32::from_rgb(14, 15, 19))
+                .fill(settings_panel_fill(&ds.config))
                 .inner_margin(egui::Margin::same(10));
 
             let mut local_config_dirty = false;
@@ -306,6 +312,122 @@ struct SettingsBodyState<'a> {
     calendar_refresh_requested: &'a mut bool,
     installed_fonts: &'a mut Option<Vec<InstalledFont>>,
     font_search: &'a mut String,
+}
+
+fn settings_panel_fill(config: &Config) -> Color32 {
+    let wayland_alpha = cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some();
+    match config.background_material {
+        BackgroundMaterial::Solid => Color32::from_rgb(14, 15, 19),
+        BackgroundMaterial::Acrylic => {
+            if wayland_alpha {
+                Color32::from_rgba_unmultiplied(18, 20, 27, 212)
+            } else {
+                Color32::from_rgb(17, 19, 25)
+            }
+        }
+        BackgroundMaterial::FrostedGlass => {
+            if wayland_alpha {
+                Color32::from_rgba_unmultiplied(24, 28, 38, 196)
+            } else {
+                Color32::from_rgb(22, 26, 35)
+            }
+        }
+        BackgroundMaterial::LiquidGlass => {
+            if wayland_alpha {
+                Color32::from_rgba_unmultiplied(15, 18, 27, 178)
+            } else {
+                Color32::from_rgb(15, 18, 28)
+            }
+        }
+    }
+}
+
+fn paint_settings_material_backdrop(ui: &egui::Ui, config: &Config) {
+    let rect = ui.max_rect().expand(10.0);
+    let painter = ui.painter();
+    let [ar, ag, ab] = config.accent_color;
+    match config.background_material {
+        BackgroundMaterial::Solid => {}
+        BackgroundMaterial::Acrylic => {
+            painter.circle_filled(
+                Pos2::new(
+                    rect.left() + rect.width() * 0.20,
+                    rect.top() + rect.height() * 0.18,
+                ),
+                rect.width() * 0.34,
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 14),
+            );
+            // Subtle micro-stipple acrylic grain pattern.
+            let step = 16.0;
+            let mut y = rect.top() + 8.0;
+            let mut row = 0u32;
+            while y < rect.bottom() {
+                let mut x = rect.left() + if row.is_multiple_of(2) { 6.0 } else { 14.0 };
+                while x < rect.right() {
+                    painter.rect_filled(
+                        Rect::from_min_size(Pos2::new(x, y), Vec2::splat(1.0)),
+                        CornerRadius::ZERO,
+                        Color32::from_rgba_unmultiplied(255, 255, 255, 6),
+                    );
+                    x += step;
+                }
+                row += 1;
+                y += step;
+            }
+        }
+        BackgroundMaterial::FrostedGlass => {
+            let top_band = Rect::from_min_max(
+                rect.min,
+                Pos2::new(rect.right(), rect.top() + rect.height() * 0.45),
+            );
+            painter.rect_filled(
+                top_band,
+                CornerRadius::ZERO,
+                Color32::from_rgba_unmultiplied(210, 224, 248, 12),
+            );
+            painter.circle_filled(
+                Pos2::new(
+                    rect.right() - rect.width() * 0.18,
+                    rect.top() + rect.height() * 0.24,
+                ),
+                rect.width() * 0.30,
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 16),
+            );
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                CornerRadius::same(12),
+                Stroke::new(1.5, Color32::from_rgba_unmultiplied(255, 255, 255, 28)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        BackgroundMaterial::LiquidGlass => {
+            let top_sheen = Rect::from_min_max(
+                rect.min,
+                Pos2::new(rect.right(), rect.top() + rect.height() * 0.36),
+            );
+            painter.rect_filled(
+                top_sheen,
+                CornerRadius::ZERO,
+                Color32::from_rgba_unmultiplied(255, 255, 255, 16),
+            );
+            painter.circle_filled(
+                Pos2::new(rect.left() + rect.width() * 0.25, rect.top() + 18.0),
+                rect.width() * 0.28,
+                Color32::from_rgba_unmultiplied(ar, ag, ab, 22),
+            );
+            painter.circle_filled(
+                Pos2::new(rect.right() - rect.width() * 0.22, rect.bottom() - 24.0),
+                rect.width() * 0.24,
+                Color32::from_rgba_unmultiplied(150, 200, 255, 14),
+            );
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                CornerRadius::same(12),
+                Stroke::new(1.2, Color32::from_rgba_unmultiplied(255, 255, 255, 42)),
+                egui::StrokeKind::Inside,
+            );
+        }
+    }
 }
 
 fn bento_card(
@@ -447,6 +569,7 @@ fn pill_toggle_chip(
 }
 
 fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) {
+    paint_settings_material_backdrop(ui, st.config);
     let left = ui.input(|i| i.key_pressed(egui::Key::ArrowLeft));
     let right = ui.input(|i| i.key_pressed(egui::Key::ArrowRight));
     if !ui.ctx().memory(|m| m.focused().is_some()) && (left || right) {
@@ -465,11 +588,23 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
         // Left Dashboard Sidebar Rail.
+        let rail_alpha = match st.config.background_material {
+            BackgroundMaterial::Solid => 245,
+            BackgroundMaterial::Acrylic => 210,
+            BackgroundMaterial::FrostedGlass => 195,
+            BackgroundMaterial::LiquidGlass => 176,
+        };
+        let rail_stroke_alpha = if st.config.background_material == BackgroundMaterial::LiquidGlass
+        {
+            42
+        } else {
+            20
+        };
         let rail_frame = egui::Frame::new()
-            .fill(Color32::from_rgb(19, 20, 26))
+            .fill(Color32::from_rgba_unmultiplied(19, 20, 26, rail_alpha))
             .stroke(Stroke::new(
                 1.0,
-                Color32::from_rgba_unmultiplied(255, 255, 255, 16),
+                Color32::from_rgba_unmultiplied(255, 255, 255, rail_stroke_alpha),
             ))
             .corner_radius(CornerRadius::same(14))
             .inner_margin(egui::Margin::same(8));
@@ -705,6 +840,7 @@ fn render_settings_tabs_body(ui: &mut egui::Ui, st: &mut SettingsBodyState<'_>) 
                             );
                         }
                         SettingsTab::Calendar => render_calendar_tab(ui, st),
+                        SettingsTab::About => render_about_tab(ui, st.config),
                     });
             },
         );
@@ -779,7 +915,7 @@ impl StandaloneSettingsApp {
     pub fn render_ui(&mut self, ui: &mut egui::Ui) {
         apply_settings_theme(ui, self.config.accent_color);
         let panel_frame = egui::Frame::new()
-            .fill(Color32::from_rgb(14, 15, 19))
+            .fill(settings_panel_fill(&self.config))
             .inner_margin(egui::Margin::same(10));
 
         let mut config_dirty = false;
@@ -1106,65 +1242,101 @@ fn render_display_tab(
 
     bento_2col(ui, gap, |ui, col_w, col| match col {
         0 => {
-            bento_card(ui, col_w, 138.0, accent, "Theme & Colors", None, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for (id, label) in [
-                        ("crimson", "Crimson"),
-                        ("obsidian", "Obsidian"),
-                        ("midnight", "Midnight"),
-                        ("amoled", "AMOLED"),
-                        ("slate", "Slate"),
-                    ] {
-                        if ui
-                            .add(
-                                egui::Button::new(RichText::new(label).size(11.0))
-                                    .fill(Color32::from_rgb(33, 35, 44))
-                                    .corner_radius(CornerRadius::same(8)),
+            bento_card(
+                ui,
+                col_w,
+                192.0,
+                accent,
+                "Theme, Colors & Glass",
+                Some((config.background_material.label(), accent_col)),
+                |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for mat in [
+                            BackgroundMaterial::Solid,
+                            BackgroundMaterial::Acrylic,
+                            BackgroundMaterial::FrostedGlass,
+                            BackgroundMaterial::LiquidGlass,
+                        ] {
+                            let selected = config.background_material == mat;
+                            if pill_toggle_chip(
+                                ui,
+                                mat.label(),
+                                selected,
+                                accent,
+                                Vec2::new(66.0, 24.0),
                             )
                             .clicked()
-                        {
-                            config.apply_preset(id);
+                                && !selected
+                            {
+                                config.background_material = mat;
+                                changed = true;
+                            }
+                        }
+                    });
+                    ui.add_space(5.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for (id, label) in [
+                            ("crimson", "Crimson"),
+                            ("obsidian", "Obsidian"),
+                            ("midnight", "Midnight"),
+                            ("amoled", "AMOLED"),
+                            ("slate", "Slate"),
+                        ] {
+                            if ui
+                                .add(
+                                    egui::Button::new(RichText::new(label).size(11.0))
+                                        .fill(Color32::from_rgb(33, 35, 44))
+                                        .corner_radius(CornerRadius::same(8)),
+                                )
+                                .clicked()
+                            {
+                                config.apply_preset(id);
+                                changed = true;
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("BG:");
+                        let mut bg_rgb =
+                            [config.bg_color[0], config.bg_color[1], config.bg_color[2]];
+                        if ui.color_edit_button_srgb(&mut bg_rgb).changed() {
+                            config.bg_color[0] = bg_rgb[0];
+                            config.bg_color[1] = bg_rgb[1];
+                            config.bg_color[2] = bg_rgb[2];
                             changed = true;
                         }
-                    }
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label("BG:");
-                    let mut bg_rgb = [config.bg_color[0], config.bg_color[1], config.bg_color[2]];
-                    if ui.color_edit_button_srgb(&mut bg_rgb).changed() {
-                        config.bg_color[0] = bg_rgb[0];
-                        config.bg_color[1] = bg_rgb[1];
-                        config.bg_color[2] = bg_rgb[2];
-                        changed = true;
-                    }
-                    ui.label("Accent:");
-                    if ui
-                        .color_edit_button_srgb(&mut config.accent_color)
-                        .changed()
-                    {
-                        changed = true;
-                    }
-                    ui.label("Text:");
-                    if ui.color_edit_button_srgb(&mut config.text_color).changed() {
-                        changed = true;
-                    }
-                });
-                changed |= ui
-                    .add(egui::Slider::new(&mut config.bg_color[3], 60..=255).text("BG Opacity"))
-                    .changed();
-                changed |= ui
-                    .add(
-                        egui::Slider::new(&mut config.border_alpha, 0..=160).text("Border Opacity"),
-                    )
-                    .changed();
-            });
+                        ui.label("Accent:");
+                        if ui
+                            .color_edit_button_srgb(&mut config.accent_color)
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                        ui.label("Text:");
+                        if ui.color_edit_button_srgb(&mut config.text_color).changed() {
+                            changed = true;
+                        }
+                    });
+                    changed |= ui
+                        .add(
+                            egui::Slider::new(&mut config.bg_color[3], 60..=255).text("BG Opacity"),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::Slider::new(&mut config.border_alpha, 0..=160)
+                                .text("Border Opacity"),
+                        )
+                        .changed();
+                },
+            );
         }
         _ => {
             bento_card(
                 ui,
                 col_w,
-                138.0,
+                192.0,
                 accent,
                 "Alignment & Font",
                 Some((config.text_align.label(), accent_col)),
@@ -2045,4 +2217,163 @@ fn render_battery_tab(ui: &mut egui::Ui, config: &mut Config, config_dirty: &mut
             });
         },
     );
+}
+
+fn render_about_tab(ui: &mut egui::Ui, config: &Config) {
+    let accent = config.accent_color;
+    let accent_col = Color32::from_rgb(accent[0], accent[1], accent[2]);
+    let version = concat!("v", env!("CARGO_PKG_VERSION"));
+    let repo_url = "https://github.com/Zahwan316/liebert-dynamic-island";
+    let gap = 8.0;
+
+    bento_card(
+        ui,
+        ui.available_width(),
+        96.0,
+        accent,
+        "Liebert Dynamic Island",
+        Some((version, Color32::from_rgb(96, 186, 150))),
+        |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                let (m_rect, _) = ui.allocate_exact_size(Vec2::splat(46.0), Sense::hover());
+                ui.painter()
+                    .rect_filled(m_rect, CornerRadius::same(12), Color32::from_rgb(10, 10, 14));
+                let eye_dir = ui
+                    .input(|i| i.pointer.hover_pos())
+                    .map(|p| {
+                        let d = p - m_rect.center();
+                        Vec2::new(
+                            (d.x / 180.0).clamp(-1.0, 1.0),
+                            (d.y / 180.0).clamp(-1.0, 1.0),
+                        )
+                    })
+                    .unwrap_or(Vec2::ZERO);
+                paint_mascot(
+                    ui.painter(),
+                    Rect::from_center_size(m_rect.center(), Vec2::splat(32.0)),
+                    eye_dir,
+                    Color32::WHITE,
+                );
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 3.0;
+                    ui.label(
+                        RichText::new("Lightweight Native Rust Overlay (Windows & Linux)")
+                            .strong()
+                            .size(13.0)
+                            .color(Color32::WHITE),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "Version {version}  •  Created by Zahwan316  •  License GPL-3.0-or-later"
+                        ))
+                        .size(11.5)
+                        .color(Color32::from_gray(195)),
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("Repository:")
+                                .size(11.0)
+                                .color(Color32::GRAY),
+                        );
+                        ui.label(
+                            RichText::new(repo_url)
+                                .size(11.0)
+                                .color(accent_col),
+                        );
+                        if ui.small_button("Copy URL").clicked() {
+                            ui.ctx().copy_text(repo_url.to_owned());
+                        }
+                    });
+                });
+            });
+        },
+    );
+
+    ui.add_space(gap);
+
+    bento_2col(ui, gap, |ui, col_w, col| match col {
+        0 => {
+            bento_card(
+                ui,
+                col_w,
+                118.0,
+                accent,
+                "Author & Architecture",
+                None,
+                |ui| {
+                    ui.label(
+                        RichText::new("Creator: Zahwan316")
+                            .strong()
+                            .size(12.0)
+                            .color(Color32::WHITE),
+                    );
+                    ui.label(
+                        RichText::new("Email / Handle: Zahwan316 (GitHub)")
+                            .size(11.0)
+                            .color(Color32::from_gray(175)),
+                    );
+                    ui.label(
+                        RichText::new("Engine: Rust 2024 · SoftCanvas CPU · egui 0.37")
+                            .size(11.0)
+                            .color(Color32::from_gray(175)),
+                    );
+                    ui.label(
+                        RichText::new("Backends: Wayland wl_shm/layer-shell · Win32 DIB/WinRT")
+                            .size(11.0)
+                            .color(Color32::from_gray(175)),
+                    );
+                },
+            );
+        }
+        _ => {
+            bento_card(
+                ui,
+                col_w,
+                118.0,
+                accent,
+                "Active Session Profile",
+                None,
+                |ui| {
+                    let os_lbl = if cfg!(windows) {
+                        "Windows (Win32 + WinRT)"
+                    } else if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                        "Linux (Wayland CPU)"
+                    } else {
+                        "Linux (X11 / Fallback)"
+                    };
+                    ui.label(
+                        RichText::new(format!("Platform: {os_lbl}"))
+                            .size(11.5)
+                            .color(Color32::WHITE),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "Background: {}",
+                            config.background_material.label()
+                        ))
+                        .size(11.5)
+                        .color(accent_col),
+                    );
+                    ui.label(
+                        RichText::new(format!(
+                            "Surface: {}  •  Mascot: {}",
+                            if config.notch_dock_mode {
+                                "Top Notch"
+                            } else {
+                                "Floating Island"
+                            },
+                            if config.show_idle_mascot {
+                                "On (Blink + Glow)"
+                            } else {
+                                "Off"
+                            }
+                        ))
+                        .size(11.0)
+                        .color(Color32::from_gray(180)),
+                    );
+                },
+            );
+        }
+    });
 }

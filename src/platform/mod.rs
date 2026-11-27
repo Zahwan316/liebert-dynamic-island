@@ -46,6 +46,75 @@ pub struct MediaTrack {
     pub updated_at: Instant,
 }
 
+pub const NOTIF_ICON_SIZE: u32 = 28;
+
+pub fn decode_notification_icon_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(1024);
+    limits.max_image_height = Some(1024);
+    limits.max_alloc = Some(8 * 1024 * 1024);
+    reader.limits(limits);
+    let img = reader.decode().ok()?;
+    let resized = img.resize_exact(
+        NOTIF_ICON_SIZE,
+        NOTIF_ICON_SIZE,
+        image::imageops::FilterType::Triangle,
+    );
+    drop(img);
+    Some(resized.into_rgba8().into_raw())
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn decode_raw_notification_image(
+    width: i32,
+    height: i32,
+    rowstride: i32,
+    has_alpha: bool,
+    bits_per_sample: i32,
+    channels: i32,
+    data: &[u8],
+) -> Option<Vec<u8>> {
+    if width <= 0
+        || height <= 0
+        || width > 1024
+        || height > 1024
+        || bits_per_sample != 8
+        || rowstride <= 0
+    {
+        return None;
+    }
+    let expected_channels = if has_alpha { 4 } else { 3 };
+    if channels != expected_channels {
+        return None;
+    }
+    let w = width as usize;
+    let h = height as usize;
+    let stride = rowstride as usize;
+    let ch = channels as usize;
+    if stride < w.checked_mul(ch)? || data.len() < stride.checked_mul(h - 1)?.checked_add(w * ch)? {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        let row = &data[y * stride..y * stride + w * ch];
+        for px in row.chunks_exact(ch) {
+            let a = if has_alpha { px[3] } else { 255 };
+            rgba.extend_from_slice(&[px[0], px[1], px[2], a]);
+        }
+    }
+    let img = image::RgbaImage::from_raw(width as u32, height as u32, rgba)?;
+    let resized = image::imageops::resize(
+        &img,
+        NOTIF_ICON_SIZE,
+        NOTIF_ICON_SIZE,
+        image::imageops::FilterType::Triangle,
+    );
+    Some(resized.into_raw())
+}
+
 pub fn decode_album_art(bytes: &[u8]) -> Option<Arc<AlbumArt>> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()

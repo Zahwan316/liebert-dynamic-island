@@ -656,6 +656,224 @@ type NotifyArgs = (
     i32,
 );
 
+/// Extracts a compact 28x28 RGBA notification icon from D-Bus hints (`image-data`,
+/// `icon_data`, `image-path`) or desktop/theme icon lookups (cached by app/icon key).
+fn extract_linux_notification_icon<'a>(
+    app_name: &str,
+    app_icon: &str,
+    hints: impl IntoIterator<Item = (&'a str, &'a OwnedVariant)>,
+) -> Option<Vec<u8>> {
+    let mut image_data: Option<&OwnedVariant> = None;
+    let mut legacy_icon_data: Option<&OwnedVariant> = None;
+    let mut image_path: Option<String> = None;
+    let mut desktop_entry: Option<String> = None;
+
+    for (k, v) in hints {
+        match k {
+            "image-data" => image_data = Some(v),
+            "icon_data" => legacy_icon_data = Some(v),
+            "image-path" => image_path = variant_to_str(v),
+            "desktop-entry" => desktop_entry = variant_to_str(v),
+            _ => {}
+        }
+    }
+
+    if let Some(rgba) = image_data
+        .or(legacy_icon_data)
+        .and_then(decode_dbus_image_hint)
+    {
+        return Some(rgba);
+    }
+
+    if let Some(ref path) = image_path
+        && let Some(rgba) = load_linux_icon_source(path)
+    {
+        return Some(rgba);
+    }
+
+    let trimmed_icon = app_icon.trim();
+    if !trimmed_icon.is_empty()
+        && (trimmed_icon.contains('/') || trimmed_icon.starts_with("file:"))
+        && let Some(rgba) = load_linux_icon_source(trimmed_icon)
+    {
+        return Some(rgba);
+    }
+
+    let cache_key = format!(
+        "{}|{}|{}",
+        trimmed_icon.to_ascii_lowercase(),
+        desktop_entry.as_deref().unwrap_or("").to_ascii_lowercase(),
+        app_name.trim().to_ascii_lowercase()
+    );
+    type IconCacheEntry = (String, Option<Vec<u8>>);
+    static ICON_CACHE: OnceLock<Mutex<Vec<IconCacheEntry>>> = OnceLock::new();
+    let cache = ICON_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Ok(guard) = cache.lock()
+        && let Some((_, cached)) = guard.iter().find(|(k, _)| k == &cache_key)
+    {
+        return cached.clone();
+    }
+
+    let mut candidates = Vec::new();
+    if !trimmed_icon.is_empty() {
+        candidates.push(trimmed_icon.to_owned());
+    }
+    if let Some(de) = desktop_entry.as_deref().filter(|s| !s.is_empty()) {
+        candidates.push(de.to_owned());
+        if let Some(icon_from_desktop) = lookup_desktop_icon_name(de) {
+            candidates.push(icon_from_desktop);
+        }
+    }
+    let app_lower = app_name.trim().to_ascii_lowercase().replace(' ', "-");
+    if !app_lower.is_empty() {
+        candidates.push(app_lower);
+    }
+
+    let mut found_rgba = None;
+    for cand in candidates {
+        if let Some(rgba) = find_theme_icon_rgba(&cand) {
+            found_rgba = Some(rgba);
+            break;
+        }
+    }
+
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= 32 {
+            guard.remove(0);
+        }
+        guard.push((cache_key, found_rgba.clone()));
+    }
+    found_rgba
+}
+
+fn unwrap_variant_ref<'a>(mut v: &'a Variant<'a>) -> &'a Variant<'a> {
+    while let Variant::Variant(inner) = v {
+        v = inner;
+    }
+    v
+}
+
+fn variant_as_i32(v: &Variant<'_>) -> Option<i32> {
+    match unwrap_variant_ref(v) {
+        Variant::I32(n) => Some(*n),
+        Variant::U32(n) => i32::try_from(*n).ok(),
+        Variant::U8(n) => Some(i32::from(*n)),
+        Variant::I16(n) => Some(i32::from(*n)),
+        Variant::U16(n) => Some(i32::from(*n)),
+        _ => None,
+    }
+}
+
+fn decode_dbus_image_hint(v: &OwnedVariant) -> Option<Vec<u8>> {
+    let Variant::Structure(s) = unwrap_variant_ref(v) else {
+        return None;
+    };
+    let fields = s.fields();
+    if fields.len() < 7 {
+        return None;
+    }
+    let width = variant_as_i32(&fields[0])?;
+    let height = variant_as_i32(&fields[1])?;
+    let rowstride = variant_as_i32(&fields[2])?;
+    let has_alpha = match unwrap_variant_ref(&fields[3]) {
+        Variant::Bool(b) => *b,
+        _ => return None,
+    };
+    let bps = variant_as_i32(&fields[4])?;
+    let channels = variant_as_i32(&fields[5])?;
+    let Variant::Array(arr) = unwrap_variant_ref(&fields[6]) else {
+        return None;
+    };
+    if arr.len() > 8 * 1024 * 1024 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(arr.len());
+    for elem in arr.iter() {
+        let Variant::U8(b) = elem else {
+            return None;
+        };
+        bytes.push(*b);
+    }
+    super::decode_raw_notification_image(width, height, rowstride, has_alpha, bps, channels, &bytes)
+}
+
+fn load_linux_icon_source(src: &str) -> Option<Vec<u8>> {
+    let path = decode_file_uri(src)?;
+    let meta = std::fs::metadata(&path).ok()?;
+    if !meta.is_file() || meta.len() > 2 * 1024 * 1024 {
+        return None;
+    }
+    let bytes = std::fs::read(&path).ok()?;
+    super::decode_notification_icon_bytes(&bytes)
+}
+
+fn lookup_desktop_icon_name(desktop_id: &str) -> Option<String> {
+    let file_name = if desktop_id.ends_with(".desktop") {
+        desktop_id.to_owned()
+    } else {
+        format!("{desktop_id}.desktop")
+    };
+    let mut roots = vec![PathBuf::from("/usr/share/applications")];
+    if let Ok(home) = std::env::var("HOME") {
+        roots.push(PathBuf::from(home).join(".local/share/applications"));
+    }
+    for dir in roots {
+        let path = dir.join(&file_name);
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            for line in raw.lines() {
+                if let Some(val) = line.strip_prefix("Icon=") {
+                    let trimmed = val.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn find_theme_icon_rgba(name: &str) -> Option<Vec<u8>> {
+    let clean = name.trim();
+    if clean.is_empty() {
+        return None;
+    }
+    if clean.contains('/') || clean.starts_with("file:") {
+        return load_linux_icon_source(clean);
+    }
+    let mut bases = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        bases.push(PathBuf::from(home).join(".local/share/icons/hicolor"));
+    }
+    bases.push(PathBuf::from("/usr/share/icons/hicolor"));
+
+    let exts = ["png", "webp", "jpg", "jpeg"];
+    let sizes = ["48x48", "64x64", "32x32", "128x128", "256x256"];
+    for base in &bases {
+        for sz in &sizes {
+            for ext in &exts {
+                let p = base.join(sz).join("apps").join(format!("{clean}.{ext}"));
+                if p.is_file()
+                    && let Ok(bytes) = std::fs::read(&p)
+                    && let Some(rgba) = super::decode_notification_icon_bytes(&bytes)
+                {
+                    return Some(rgba);
+                }
+            }
+        }
+    }
+    for ext in &exts {
+        let p = PathBuf::from("/usr/share/pixmaps").join(format!("{clean}.{ext}"));
+        if p.is_file()
+            && let Ok(bytes) = std::fs::read(&p)
+            && let Some(rgba) = super::decode_notification_icon_bytes(&bytes)
+        {
+            return Some(rgba);
+        }
+    }
+    None
+}
+
 /// Decode a monitored D-Bus message into the same `PlatformEvent`s emitted by our server.
 /// Used when another notification daemon owns `org.freedesktop.Notifications`.
 fn decode_monitored_message(msg: &zbus::Message) -> Option<Vec<PlatformEvent>> {
@@ -665,7 +883,7 @@ fn decode_monitored_message(msg: &zbus::Message) -> Option<Vec<PlatformEvent>> {
     }
     match header.member().map(|v| v.as_str()) {
         Some("Notify") => {
-            let (app_name, replaces_id, _icon, summary, body, _actions, _hints, _expire): NotifyArgs =
+            let (app_name, replaces_id, icon, summary, body, _actions, hints, _expire): NotifyArgs =
                 msg.body().deserialize().ok()?;
             let id = if replaces_id != 0 {
                 replaces_id
@@ -676,6 +894,11 @@ fn decode_monitored_message(msg: &zbus::Message) -> Option<Vec<PlatformEvent>> {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
+            let icon_rgba = extract_linux_notification_icon(
+                &app_name,
+                &icon,
+                hints.iter().map(|(k, v)| (k.as_str(), v)),
+            );
             Some(vec![PlatformEvent::Notification(
                 sanitized_notification_item(
                     id.to_string(),
@@ -683,7 +906,7 @@ fn decode_monitored_message(msg: &zbus::Message) -> Option<Vec<PlatformEvent>> {
                     "Linux",
                     &summary,
                     &body,
-                    None,
+                    icon_rgba,
                     timestamp,
                 ),
             )])
@@ -745,11 +968,11 @@ impl NotificationServer {
         &self,
         app_name: &str,
         replaces_id: u32,
-        _app_icon: &str,
+        app_icon: &str,
         summary: &str,
         body: &str,
         _actions: Vec<&str>,
-        _hints: HashMap<&str, zbus::OwnedVariant>,
+        hints: HashMap<&str, zbus::OwnedVariant>,
         _expire_timeout: i32,
     ) -> u32 {
         let id = if replaces_id != 0 {
@@ -761,6 +984,8 @@ impl NotificationServer {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        let icon_rgba =
+            extract_linux_notification_icon(app_name, app_icon, hints.iter().map(|(&k, v)| (k, v)));
 
         let item = sanitized_notification_item(
             id.to_string(),
@@ -768,7 +993,7 @@ impl NotificationServer {
             "Linux",
             summary,
             body,
-            None,
+            icon_rgba,
             timestamp,
         );
         let _ = self.tx.send(PlatformEvent::Notification(item));
@@ -786,7 +1011,7 @@ impl NotificationServer {
     }
 
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
-        ("liebert-dynamic-island", "Liebert", "0.1.12", "1.2")
+        ("liebert-dynamic-island", "Liebert", "0.1.13", "1.2")
     }
 }
 
@@ -1668,7 +1893,7 @@ fn load_art_from_url(agent: &ureq::Agent, url: &str) -> Option<Arc<AlbumArt>> {
                 .get(&candidate)
                 .header(
                     "User-Agent",
-                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.12",
+                    "Mozilla/5.0 (X11; Linux x86_64) LiebertDynamicIsland/0.1.13",
                 )
                 .header(
                     "Accept",
